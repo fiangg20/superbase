@@ -1,6 +1,12 @@
-# Superbase
+<p align="center">
+  <img src="assets/icon.png" alt="Superbase" width="128">
+</p>
 
-**Let an AI assistant debug your live Roblox game.**
+<h1 align="center">Superbase</h1>
+
+<p align="center">
+  <strong>Let an AI assistant debug your live Roblox game.</strong>
+</p>
 
 Superbase is a local [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that connects AI assistants to a running Roblox session through your executor. The AI can read the console and script errors, search and inspect the instance tree, read scripts, change properties and run Lua, and it always knows whether Roblox is actually connected.
 
