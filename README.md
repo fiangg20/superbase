@@ -68,8 +68,6 @@ Because the bridge stores logs, the AI can still read what happened after you le
 - A Roblox executor that supports `WebSocket.connect` and `loadstring`
 - An AI client that supports MCP servers over stdio
 
-Tested with Claude Desktop on Windows and the Solara executor. Other clients and executors should work, but they are not tested (see [Compatibility notes](#compatibility-notes)).
-
 ## Quick start
 
 **1. Install and start the bridge**
@@ -251,7 +249,7 @@ Once connected, you can ask things like:
 Every result starts with a status line, for example:
 
 ```
-[Superbase] ● connected — place 123456, Solara 3.2, 12 ms
+[Superbase] ● connected — place 123456, executor_name 3.2, 12 ms
 ```
 
 Tools marked **needs game** only run in the `connected` state. The others work as soon as the bridge is up, so the AI can still read stored logs and errors after you left the game.
