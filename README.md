@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/icon.png" alt="Superbase" width="128">
+  <img src="assets/icon.png" alt="Superbase" width="256">
 </p>
 
 <h1 align="center">Superbase</h1>
