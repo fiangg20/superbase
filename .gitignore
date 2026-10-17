@@ -1,14 +1,25 @@
-# A fast, small, safe, gradually typed embeddable scripting language derived from Lua
-#
-# https://github.com/luau-lang/luau
-# https://luau.org/
+# Dependencies
+node_modules/
 
-# Code coverage
-coverage.out
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.local.*
+claude_desktop_config.json
 
-# Profiling
-profile.out
-profile.svg
+# Logs
+*.log
+npm-debug.log*
 
-# Time trace
-trace.json
+# Build and test output
+coverage/
+*.tgz
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
