@@ -31,11 +31,26 @@ end
 local source = nil
 local method = nil
 
+-- Some executors decompile through an online service. When that service is down, they return
+-- an error page as if it were the source, so recognize that output and treat it as a failure.
+local function looksLikeDecompilerError(text)
+    local head = string.lower(string.sub(text, 1, 200))
+    return string.find(head, "api request error", 1, true) ~= nil
+        or string.find(head, "decompil", 1, true) ~= nil and string.find(head, "fail", 1, true) ~= nil
+        or string.find(head, "<!doctype html", 1, true) ~= nil
+end
+
+local decompileFailed = false
+
 if type(decompile) == "function" then
     local ok, result = pcall(decompile, instance)
     if ok and type(result) == "string" and #result > 0 then
-        source = result
-        method = "decompile"
+        if looksLikeDecompilerError(result) then
+            decompileFailed = true
+        else
+            source = result
+            method = "decompile"
+        end
     end
 end
 
@@ -50,6 +65,9 @@ if not source then
 end
 
 if not source then
+    if decompileFailed then
+        return { error = "The executor's decompiler returned an error instead of source code (its online service may be down). Try again later." }
+    end
     return { error = "Could not read the source. This executor has no working decompile and the Source property is not readable." }
 end
 
