@@ -529,7 +529,6 @@ To add a tool that runs Lua in the game, put the code in `src/lua/<name>.lua` (i
 
 - The MCP server targets protocol versions 2025-06-18, 2025-03-26 and 2024-11-05.
 - Executors differ. `decompile`, `identifyexecutor` and the WebSocket API are optional or named differently in some of them, and the client falls back where it can.
-- `UIShadow` (used by the intro) is not available everywhere. The intro skips it when it is missing.
 
 ## Troubleshooting
 
