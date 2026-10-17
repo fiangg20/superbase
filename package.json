@@ -3,6 +3,12 @@
   "version": "1.2.0",
   "description": "Superbase: a local MCP server that connects AI assistants to a live Roblox executor session. Read console logs and errors, search and inspect the instance tree, read scripts and run Lua, with the connection status reported on every call.",
   "private": true,
+  "author": "Base Architect",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fiangg20/superbase.git"
+  },
   "main": "src/bridge.js",
   "scripts": {
     "start": "node src/bridge.js",
