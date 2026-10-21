@@ -1,3 +1,4 @@
+[![M8ven Score](https://m8ven.ai/badge/mcp/fiangg20-superbase-1nmxtn?v=66217098fa518e7a66a609905ea7ba9d)](https://m8ven.ai/mcp/fiangg20-superbase-1nmxtn?s=readme)
 <p align="center">
   <img src="assets/icon.png" alt="Superbase" width="256">
 </p>
