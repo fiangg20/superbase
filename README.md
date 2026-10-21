@@ -8,7 +8,7 @@
   <strong>Let an AI assistant debug your live Roblox game.</strong>
 </p>
 
-[![M8ven Score](https://m8ven.ai/badge/mcp/fiangg20-superbase-1nmxtn?v=66217098fa518e7a66a609905ea7ba9d)](https://m8ven.ai/mcp/fiangg20-superbase-1nmxtn?s=readme)
+[![M8ven Score](https://m8ven.ai/badge/mcp/fiangg20-superbase-1nmxtn?v=66217098fa518e7a66a609905ea7ba9d)](https://m8ven.ai/mcp/fiangg20-superbase-1nmxtn?s=readme)\n
 Superbase is a local [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that connects AI assistants to a running Roblox session through your executor. The AI can read the console and script errors, search and inspect the instance tree, read scripts, change properties and run Lua, and it always knows whether Roblox is actually connected.
 
 - **Zero configuration.** No token, no account, no copy and paste. Start the bridge, run one line in your executor, add the MCP server to your AI client.
