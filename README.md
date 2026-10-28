@@ -818,4 +818,4 @@ Superbase is released under the [MIT License](LICENSE). You may use, copy, modif
 
 Superbase is an independent project and is not affiliated with Roblox.
 
-[![M8ven Score](https://m8ven.ai/badge/mcp/fiangg20-superbase-1nmxtn?v=66217098fa518e7a66a609905ea7ba9d)](https://m8ven.ai/mcp/fiangg20-superbase-1nmxtn?s=readme)
+[![M8ven Verified](https://m8ven.ai/api/agent-verify/badge?score=100)](https://m8ven.ai/verified/verify?id=0bb49c4198ee7e63)
