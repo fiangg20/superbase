@@ -43,6 +43,7 @@ Superbase is a local [Model Context Protocol](https://modelcontextprotocol.io) (
 - [Development](#development)
 - [Troubleshooting](#troubleshooting)
 - [FAQ](#faq)
+- [License](#license)
 
 ## How it works
 
@@ -810,5 +811,11 @@ It works wherever your executor can run scripts. Some games detect or block exec
 
 **Is it affiliated with Roblox?**
 No. Superbase is an independent project.
+
+## License
+
+Superbase is released under the [MIT License](LICENSE). You may use, copy, modify and distribute it, including in commercial projects, as long as the copyright notice and the license text stay with it. The software comes without any warranty. You are responsible for where and how you use it, see [Security](#security).
+
+Superbase is an independent project and is not affiliated with Roblox.
 
 [![M8ven Score](https://m8ven.ai/badge/mcp/fiangg20-superbase-1nmxtn?v=66217098fa518e7a66a609905ea7ba9d)](https://m8ven.ai/mcp/fiangg20-superbase-1nmxtn?s=readme)
