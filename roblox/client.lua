@@ -2,6 +2,7 @@
 -- Superbase client for Roblox executors.
 -- Connects to the local Superbase bridge over WebSocket, streams console logs and
 -- script errors, and answers "exec", "inspect" and "ping" commands from the bridge.
+-- Several clients (several Roblox windows) can be connected to the same bridge at once.
 -- It also plays a short intro and shows status notifications (connected, disconnected, ...).
 
 local CONFIG = {
@@ -9,11 +10,11 @@ local CONFIG = {
     Token = "", -- leave empty unless the bridge was started with BRIDGE_TOKEN
     ReconnectDelay = 3,
     MaxMessageLength = 4000,
-    MaxTableEntries = 50,
+    MaxTableEntries = 200,
     MaxResultLength = 60000,
-    MaxDepth = 4,
+    MaxDepth = 6,
     HistoryLines = 100,
-    Version = "1.2.0",
+    Version = "1.3.0",
 
     -- Status notifications (small toasts in the top right corner).
     Notifications = true, -- connected, disconnected, bridge not found, rejected
@@ -1025,6 +1026,8 @@ local function connectLoop()
                 token = CONFIG.Token ~= "" and CONFIG.Token or nil,
                 placeId = game.PlaceId,
                 jobId = game.JobId,
+                userId = Players.LocalPlayer and Players.LocalPlayer.UserId or nil,
+                userName = Players.LocalPlayer and Players.LocalPlayer.Name or nil,
                 executor = getExecutorName(),
                 clientVersion = CONFIG.Version,
             })

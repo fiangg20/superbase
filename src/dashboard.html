@@ -1,0 +1,1448 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Superbase Dashboard</title>
+<link rel="icon" href="/icon.png">
+<style>
+:root {
+  --bg: #f4f6fa;
+  --rail: #e9edf4;
+  --surface: #ffffff;
+  --raised: #e8ecf3;
+  --text: #11151d;
+  --muted: #4d5767;
+  --border: #cfd6e2;
+  --border-soft: #e1e6ee;
+  --accent-text: #2447d6;
+  --btn: #2f58f0;
+  --btn-hover: #2548d4;
+  --btn-text: #ffffff;
+  --sel-bg: #e8eefe;
+  --focus: #2447d6;
+  --err-text: #b3261e;
+  --err-bg: #fdecea;
+  --warn-text: #6b4a00;
+  --warn-bg: #fff3cd;
+  --ok-text: #1b6e3f;
+  --ok-dot: #178a4a;
+  --ok-ring: rgba(23, 138, 74, 0.35);
+  --info-text: #2f4a9e;
+  --code-bg: #f6f8fb;
+  --shadow: 0 1px 2px rgba(17, 21, 29, 0.06);
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0c0f15;
+    --rail: #090b10;
+    --surface: #10131a;
+    --raised: #1a1f2a;
+    --text: #e7eaf1;
+    --muted: #9aa2b1;
+    --border: #252b38;
+    --border-soft: #1b202b;
+    --accent-text: #8fa6ff;
+    --btn: #2f58f0;
+    --btn-hover: #4468f2;
+    --btn-text: #ffffff;
+    --sel-bg: #18204a;
+    --focus: #8fa6ff;
+    --err-text: #ff8a80;
+    --err-bg: #2a1514;
+    --warn-text: #f2c14e;
+    --warn-bg: #2b2410;
+    --ok-text: #5fd08b;
+    --ok-dot: #3fcf7d;
+    --ok-ring: rgba(63, 207, 125, 0.4);
+    --info-text: #9db3ff;
+    --code-bg: #0b0e14;
+    --shadow: none;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0c0f15;
+  --rail: #090b10;
+  --surface: #10131a;
+  --raised: #1a1f2a;
+  --text: #e7eaf1;
+  --muted: #9aa2b1;
+  --border: #252b38;
+  --border-soft: #1b202b;
+  --accent-text: #8fa6ff;
+  --btn: #2f58f0;
+  --btn-hover: #4468f2;
+  --btn-text: #ffffff;
+  --sel-bg: #18204a;
+  --focus: #8fa6ff;
+  --err-text: #ff8a80;
+  --err-bg: #2a1514;
+  --warn-text: #f2c14e;
+  --warn-bg: #2b2410;
+  --ok-text: #5fd08b;
+  --ok-dot: #3fcf7d;
+  --ok-ring: rgba(63, 207, 125, 0.4);
+  --info-text: #9db3ff;
+  --code-bg: #0b0e14;
+  --shadow: none;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html { -webkit-text-size-adjust: 100%; height: 100%; }
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--surface);
+  color: var(--text);
+  font: 14px/1.45 "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+h1, h2, h3, p { margin: 0; }
+button, input, select, textarea { font: inherit; color: inherit; }
+code, pre, textarea.mono, .mono {
+  font-family: "Cascadia Mono", "JetBrains Mono", ui-monospace, "SF Mono", Consolas, Menlo, monospace;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+.skip {
+  position: absolute; left: 12px; top: -48px; padding: 10px 14px;
+  background: var(--btn); color: var(--btn-text); border-radius: 8px; z-index: 10;
+}
+.skip:focus { top: 8px; }
+
+/* App frame: a rail on the left, the workspace fills the rest of the window */
+.app { display: grid; grid-template-columns: 232px minmax(0, 1fr); height: 100dvh; }
+.rail {
+  display: flex; flex-direction: column; gap: 22px; min-height: 0; overflow: auto;
+  padding: 18px 14px 14px; background: var(--rail); border-right: 1px solid var(--border);
+}
+.brand { display: flex; align-items: center; gap: 10px; padding: 0 6px; color: var(--text); text-decoration: none; font-weight: 650; font-size: 17px; letter-spacing: -0.015em; }
+.brand img { width: 28px; height: 28px; border-radius: 7px; display: block; }
+
+.tabs { display: flex; flex-direction: column; gap: 2px; }
+.tab {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  min-height: 38px; padding: 0 12px; border: 0; border-radius: 9px; background: transparent;
+  color: var(--muted); font-weight: 500; text-align: left; cursor: pointer;
+}
+.tab:hover { color: var(--text); background: var(--raised); }
+.tab[aria-selected="true"] { color: var(--text); background: var(--surface); font-weight: 600; box-shadow: 0 0 0 1px var(--border), var(--shadow); }
+.count {
+  min-width: 1.9em; padding: 0 6px; border-radius: 6px; background: var(--raised); color: var(--muted);
+  font-size: 12px; font-weight: 600; text-align: center; font-variant-numeric: tabular-nums;
+}
+.tab[aria-selected="true"] .count { background: var(--bg); }
+.count.has-errors { background: var(--err-bg); color: var(--err-text); }
+
+.rail-foot { margin-top: auto; display: grid; gap: 10px; }
+.bridge {
+  display: grid; gap: 1px; padding: 10px 12px; border-radius: 10px;
+  background: var(--surface); border: 1px solid var(--border-soft); min-width: 0;
+}
+.bridge .name { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.bridge .detail { color: var(--muted); font-size: 12.5px; padding-left: 16px; overflow-wrap: anywhere; }
+.dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.bridge[data-state="online"] .dot { background: var(--ok-dot); animation: pulse 2.6s ease-out infinite; }
+.bridge[data-state="offline"] .dot { background: var(--err-text); }
+@keyframes pulse {
+  0% { box-shadow: 0 0 0 0 var(--ok-ring); }
+  70%, 100% { box-shadow: 0 0 0 7px rgba(0, 0, 0, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bridge[data-state="online"] .dot { animation: none; }
+}
+
+/* Buttons */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  min-height: 36px; padding: 0 14px; border-radius: 8px; cursor: pointer; text-decoration: none;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text); font-weight: 500;
+}
+.btn:hover:not(:disabled) { background: var(--raised); }
+.btn.primary { background: var(--btn); border-color: var(--btn); color: var(--btn-text); font-weight: 600; }
+.btn.primary:hover:not(:disabled) { background: var(--btn-hover); border-color: var(--btn-hover); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn.small { min-height: 32px; padding: 0 10px; font-size: 13px; }
+#theme { background: transparent; }
+
+/* Workspace */
+.work { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--surface); }
+
+.banner { flex: 0 0 auto; padding: 9px 20px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; border-bottom: 1px solid currentColor; }
+.banner.error { background: var(--err-bg); color: var(--err-text); }
+.banner.info { background: var(--warn-bg); color: var(--warn-text); }
+.banner p { flex: 1 1 280px; font-weight: 500; }
+
+/* Target strip: which Roblox window the tools talk to */
+.target { flex: 0 0 auto; display: flex; align-items: center; gap: 14px; padding: 12px 20px; background: var(--bg); border-bottom: 1px solid var(--border); min-width: 0; }
+.target h2 { flex: 0 0 auto; font-size: 13px; font-weight: 600; color: var(--muted); }
+.clients { flex: 1 1 auto; min-width: 0; display: flex; gap: 8px; overflow-x: auto; padding: 2px; scrollbar-width: thin; }
+.client {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 6px 12px; border-radius: 10px;
+  border: 1px solid var(--border); background: var(--surface); text-align: left; cursor: pointer; max-width: 340px;
+}
+.client:hover { background: var(--raised); }
+.client[aria-pressed="true"] { border-color: var(--btn); background: var(--sel-bg); box-shadow: 0 0 0 1px var(--btn); }
+.client .stack { display: grid; min-width: 0; }
+.client .who { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.client .meta { color: var(--muted); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.client .dot { background: var(--ok-dot); }
+.client .tag { flex: 0 0 auto; padding: 1px 7px; border-radius: 6px; background: var(--raised); color: var(--accent-text); font-size: 12px; font-weight: 600; }
+.client[aria-pressed="true"] .tag { background: var(--surface); }
+.hint-right { flex: 0 1 240px; text-align: right; color: var(--muted); font-size: 12.5px; }
+.loader-box { flex: 1 1 100%; display: grid; gap: 6px; padding: 10px 14px; border: 1px dashed var(--border); border-radius: 10px; background: var(--surface); }
+.loader-box p { font-size: 13px; }
+.loader-line { display: flex; flex-wrap: wrap; gap: 8px; align-items: stretch; }
+.loader-line code { flex: 1 1 280px; min-width: 0; padding: 8px 12px; border-radius: 8px; background: var(--code-bg); border: 1px solid var(--border); overflow-wrap: anywhere; user-select: all; }
+
+.stage { flex: 1 1 auto; min-height: 0; display: flex; padding: 16px 20px 18px; }
+.panel { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 12px; }
+.panel[hidden] { display: none; }
+
+.muted { color: var(--muted); }
+.small-text { font-size: 13px; }
+.toolbar { flex: 0 0 auto; display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: flex-end; }
+.toolbar.center { align-items: center; }
+.toolbar .grow { flex: 1 1 200px; }
+.field { display: grid; gap: 4px; }
+.field label, .label { font-size: 12.5px; font-weight: 500; color: var(--muted); }
+input[type="text"], input[type="search"], input[type="password"], select, textarea {
+  min-height: 36px; padding: 5px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); width: 100%;
+}
+input::placeholder, textarea::placeholder { color: var(--muted); opacity: 1; }
+select { width: auto; }
+textarea { min-height: 160px; resize: vertical; line-height: 1.5; }
+.check { display: inline-flex; align-items: center; gap: 8px; min-height: 36px; }
+.check input { width: 17px; height: 17px; accent-color: var(--btn); }
+
+.state-box {
+  flex: 1 1 auto; min-height: 180px; display: grid; place-content: center; gap: 4px; padding: 24px 16px; text-align: center;
+  color: var(--muted); border: 1px dashed var(--border); border-radius: 12px;
+}
+.state-box.error { color: var(--err-text); border-color: var(--err-text); }
+.state-box strong { color: var(--text); display: block; }
+.state-box.error strong { color: var(--err-text); }
+.empty { padding: 24px 16px; text-align: center; color: var(--muted); }
+
+/* Logs */
+.log-list { flex: 1 1 auto; min-height: 200px; overflow: auto; border: 1px solid var(--border); border-radius: 12px; background: var(--code-bg); padding: 4px 0; }
+.log-row { display: grid; grid-template-columns: 96px 44px 30px minmax(0, 1fr); gap: 12px; padding: 2px 14px; align-items: baseline; }
+.log-row:hover { background: var(--raised); }
+.log-row .t, .log-row .c { color: var(--muted); }
+.log-row .lvl { font-weight: 700; }
+.log-row.info .lvl { color: var(--info-text); }
+.log-row.warn .lvl { color: var(--warn-text); }
+.log-row.error .lvl { color: var(--err-text); }
+.log-row.warn { background: var(--warn-bg); }
+.log-row.error { background: var(--err-bg); }
+.log-row .m { white-space: pre-wrap; overflow-wrap: anywhere; }
+.log-row.history .m { color: var(--muted); }
+.log-row .head { display: contents; }
+
+.status-line { flex: 0 0 auto; font-size: 13px; color: var(--muted); min-height: 1.45em; }
+.status-line.error { color: var(--err-text); }
+.status-line.ok { color: var(--ok-text); }
+.hint { font-size: 13px; color: var(--muted); }
+.warn-text { color: var(--warn-text); font-size: 13px; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .warn-text { color: var(--warn-text); } }
+
+/* Errors */
+.error-list { flex: 1 1 auto; min-height: 0; overflow: auto; display: grid; align-content: start; gap: 10px; }
+.error-card { border: 1px solid var(--border); border-radius: 12px; background: var(--code-bg); padding: 12px 14px; display: grid; gap: 6px; }
+.error-card .head { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--muted); font-size: 12.5px; }
+.error-card .msg { color: var(--err-text); font-weight: 600; overflow-wrap: anywhere; white-space: pre-wrap; }
+.error-card pre { margin: 0; padding: 10px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border-soft); overflow: auto; max-height: 240px; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* Run Lua */
+.editor { flex: 1 1 200px; min-height: 160px; display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 4px; }
+.editor textarea { height: 100%; min-height: 140px; background: var(--code-bg); }
+.output { flex: 0 1 auto; margin: 0; padding: 12px; border-radius: 12px; background: var(--code-bg); border: 1px solid var(--border); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 40vh; overflow: auto; }
+.output.error { color: var(--err-text); background: var(--err-bg); border-color: var(--err-text); }
+
+/* Explorer */
+.crumbs { flex: 0 0 auto; display: flex; flex-wrap: wrap; gap: 2px 4px; align-items: center; }
+.crumbs:empty { display: none; }
+.crumbs button { background: none; border: 0; cursor: pointer; padding: 4px 6px; min-height: 30px; color: var(--accent-text); font-weight: 600; border-radius: 6px; }
+.crumbs button:hover { background: var(--raised); }
+.crumbs button[aria-current="page"] { color: var(--text); cursor: default; background: none; }
+.crumbs .sep { color: var(--muted); }
+.split { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 14px; }
+.box { display: flex; flex-direction: column; min-height: 0; min-width: 0; border: 1px solid var(--border); border-radius: 12px; background: var(--code-bg); overflow: hidden; }
+.box h3 { flex: 0 0 auto; font-size: 13px; padding: 9px 14px; border-bottom: 1px solid var(--border); color: var(--muted); font-weight: 600; background: var(--bg); }
+.children { flex: 1 1 auto; min-height: 0; overflow: auto; }
+.child { display: flex; justify-content: space-between; gap: 12px; width: 100%; text-align: left; padding: 7px 14px; min-height: 36px; background: none; border: 0; border-bottom: 1px solid var(--border-soft); cursor: pointer; }
+.child:last-child { border-bottom: 0; }
+.child:hover:not(:disabled) { background: var(--raised); }
+.child:disabled { cursor: not-allowed; opacity: 0.6; }
+.child .n { overflow-wrap: anywhere; font-weight: 500; }
+.child .k { color: var(--muted); font-size: 12.5px; flex: 0 0 auto; }
+.props-wrap { flex: 1 1 auto; min-height: 0; overflow: auto; }
+table.props { width: 100%; border-collapse: collapse; }
+table.props th, table.props td { text-align: left; vertical-align: top; padding: 7px 14px; border-bottom: 1px solid var(--border-soft); }
+table.props tr:last-child th, table.props tr:last-child td { border-bottom: 0; }
+table.props th { width: 36%; color: var(--muted); font-weight: 500; font-size: 13px; overflow-wrap: anywhere; }
+table.props td { overflow-wrap: anywhere; }
+.props-add { flex: 0 0 auto; display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--border); background: var(--bg); }
+.props-add input { flex: 1 1 160px; }
+
+/* Screenshot */
+.shot-frame { flex: 1 1 auto; min-height: 220px; overflow: auto; display: grid; place-items: center; border: 1px solid var(--border); border-radius: 12px; background: var(--code-bg); }
+.shot-frame img { max-width: 100%; height: auto; display: block; }
+
+dialog { border: 1px solid var(--border); border-radius: 14px; background: var(--surface); color: var(--text); padding: 22px; max-width: min(440px, calc(100vw - 32px)); }
+dialog::backdrop { background: rgba(0, 0, 0, 0.55); }
+dialog form { display: grid; gap: 12px; }
+dialog h2 { font-size: 16px; font-weight: 650; }
+dialog .actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* Narrow windows: the rail becomes a header and the page scrolls normally */
+@media (max-width: 820px) {
+  html, body { height: auto; }
+  .app { display: block; height: auto; min-height: 100dvh; }
+  .rail {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "brand theme" "bridge bridge" "tabs tabs";
+    gap: 10px 12px; padding: 12px 16px 0; overflow: visible; border-right: 0; border-bottom: 1px solid var(--border);
+  }
+  .rail-foot { display: contents; }
+  .brand { grid-area: brand; }
+  #theme { grid-area: theme; }
+  .bridge { grid-area: bridge; }
+  .tabs { grid-area: tabs; }
+  .bridge { display: flex; flex-wrap: wrap; align-items: center; gap: 0 10px; padding: 0; background: none; border: 0; }
+  .bridge .detail { padding-left: 0; }
+  .tabs { flex-direction: row; overflow-x: auto; gap: 4px; margin: 0 -16px; padding: 0 16px 8px; scrollbar-width: thin; }
+  .tab { flex: 0 0 auto; min-height: 44px; padding: 0 14px; }
+  .work { display: block; }
+  .banner { padding: 9px 16px; }
+  .target { flex-direction: column; align-items: stretch; gap: 6px; padding: 10px 16px; }
+  .hint-right { display: none; }
+  .stage { display: block; padding: 14px 16px 24px; }
+  .log-list { height: 60dvh; }
+  .state-box { min-height: 160px; }
+  .split { grid-template-columns: minmax(0, 1fr); }
+  .children { max-height: 46vh; }
+  .props-wrap { max-height: 46vh; }
+  .error-list { overflow: visible; }
+  .editor textarea { height: 200px; }
+  .btn, .btn.small { min-height: 44px; }
+  input[type="text"], input[type="search"], input[type="password"], select { min-height: 44px; }
+  .check { min-height: 44px; }
+  .crumbs button { min-height: 44px; }
+  .child { min-height: 44px; }
+  .log-row { grid-template-columns: minmax(0, 1fr); gap: 2px; padding: 6px 14px; }
+  .log-row .head { display: flex; flex-wrap: wrap; gap: 0 12px; }
+}
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<div class="app">
+  <aside class="rail">
+    <a class="brand" href="/"><img id="logo" src="/icon.png" alt="" width="28" height="28"><span>Superbase</span></a>
+
+    <div class="tabs" role="tablist" aria-label="Tools" aria-orientation="vertical">
+      <button class="tab" role="tab" id="tab-logs" aria-controls="panel-logs" aria-selected="true"><span>Logs</span> <span id="count-logs" class="count">0</span></button>
+      <button class="tab" role="tab" id="tab-errors" aria-controls="panel-errors" aria-selected="false" tabindex="-1"><span>Errors</span> <span id="count-errors" class="count">0</span></button>
+      <button class="tab" role="tab" id="tab-console" aria-controls="panel-console" aria-selected="false" tabindex="-1"><span>Run Lua</span></button>
+      <button class="tab" role="tab" id="tab-explorer" aria-controls="panel-explorer" aria-selected="false" tabindex="-1"><span>Explorer</span></button>
+      <button class="tab" role="tab" id="tab-screenshot" aria-controls="panel-screenshot" aria-selected="false" tabindex="-1"><span>Screenshot</span></button>
+    </div>
+
+    <div class="rail-foot">
+      <div id="bridge-info" class="bridge" data-state="connecting" role="status">
+        <span class="name"><span class="dot" aria-hidden="true"></span><span>Connecting to the bridge...</span></span>
+      </div>
+      <button id="theme" type="button" class="btn small">Dark theme</button>
+    </div>
+  </aside>
+
+  <div class="work">
+    <div id="banner" class="banner error" role="alert" hidden>
+      <p id="banner-text"></p>
+      <button id="banner-action" type="button" class="btn small">Retry now</button>
+    </div>
+
+    <section class="target" aria-labelledby="clients-title">
+      <h2 id="clients-title">Roblox client</h2>
+      <div id="clients" class="clients"></div>
+      <p id="clients-hint" class="hint-right">Tools use the newest client. Pick one to lock it.</p>
+    </section>
+
+    <main id="main" class="stage">
+      <!-- Logs -->
+      <section class="panel" role="tabpanel" id="panel-logs" aria-labelledby="tab-logs">
+        <div class="toolbar">
+          <div class="field">
+            <label for="log-level">Level</label>
+            <select id="log-level">
+              <option value="">All levels</option>
+              <option value="info">Info</option>
+              <option value="warn">Warnings</option>
+              <option value="error">Errors</option>
+            </select>
+          </div>
+          <div class="field grow">
+            <label for="log-search">Search</label>
+            <input id="log-search" type="search" placeholder="Filter lines">
+          </div>
+          <label class="check"><input id="log-scroll" type="checkbox" checked> Follow new lines</label>
+          <button id="log-pause" type="button" class="btn">Pause</button>
+          <button id="log-clear" type="button" class="btn">Clear</button>
+        </div>
+        <div id="log-state" class="state-box">Loading logs...</div>
+        <div id="log-list" class="log-list" role="log" aria-live="off" aria-label="Console output" tabindex="0" hidden></div>
+        <p id="log-count" class="status-line"></p>
+      </section>
+
+      <!-- Errors -->
+      <section class="panel" role="tabpanel" id="panel-errors" aria-labelledby="tab-errors" hidden>
+        <div class="toolbar">
+          <div class="field grow">
+            <label for="error-search">Search</label>
+            <input id="error-search" type="search" placeholder="Filter by message, script or trace">
+          </div>
+          <button id="error-clear" type="button" class="btn">Clear</button>
+        </div>
+        <div id="error-state" class="state-box">Loading errors...</div>
+        <div id="error-list" class="error-list" hidden></div>
+      </section>
+
+      <!-- Run Lua -->
+      <section class="panel" role="tabpanel" id="panel-console" aria-labelledby="tab-console" hidden>
+        <div class="editor">
+          <label class="label" for="lua-code">Lua code</label>
+          <textarea id="lua-code" class="mono" spellcheck="false" placeholder="return game.PlaceId"></textarea>
+        </div>
+        <div class="toolbar center">
+          <button id="lua-run" type="button" class="btn primary">Run</button>
+          <div class="field">
+            <label class="sr-only" for="lua-timeout">Timeout</label>
+            <select id="lua-timeout" aria-label="Timeout">
+              <option value="15000">Timeout 15 s</option>
+              <option value="30000">Timeout 30 s</option>
+              <option value="60000">Timeout 60 s</option>
+            </select>
+          </div>
+          <div class="field">
+            <label class="sr-only" for="lua-history">Recent code</label>
+            <select id="lua-history" aria-label="Recent code"><option value="">Recent code</option></select>
+          </div>
+          <button id="lua-clear" type="button" class="btn">Clear output</button>
+          <span class="hint">Ctrl+Enter runs the code.</span>
+        </div>
+        <p id="lua-hint" class="warn-text">Code runs with your executor's full permissions.</p>
+        <p id="lua-status" class="status-line" role="status"></p>
+        <pre id="lua-output" class="output mono" hidden></pre>
+      </section>
+
+      <!-- Explorer -->
+      <section class="panel" role="tabpanel" id="panel-explorer" aria-labelledby="tab-explorer" hidden>
+        <form id="explorer-form" class="toolbar">
+          <div class="field grow">
+            <label for="explorer-path">Instance path</label>
+            <input id="explorer-path" type="text" value="game" autocomplete="off" spellcheck="false">
+          </div>
+          <button id="explorer-go" type="submit" class="btn primary">Open</button>
+        </form>
+        <nav id="crumbs" class="crumbs" aria-label="Path"></nav>
+        <div id="explorer-state" class="state-box">Connect a Roblox client, then open a path.</div>
+        <div id="explorer-body" class="split" hidden>
+          <div class="box">
+            <h3 id="children-title">Children</h3>
+            <div id="children" class="children"></div>
+          </div>
+          <div class="box">
+            <h3>Properties</h3>
+            <div class="props-wrap"><table class="props" id="props"><tbody></tbody></table></div>
+            <form id="props-form" class="props-add">
+              <label class="sr-only" for="props-input">Property names</label>
+              <input id="props-input" type="text" value="Name, ClassName, Parent" autocomplete="off" spellcheck="false">
+              <button type="submit" class="btn small">Read</button>
+            </form>
+          </div>
+        </div>
+      </section>
+
+      <!-- Screenshot -->
+      <section class="panel" role="tabpanel" id="panel-screenshot" aria-labelledby="tab-screenshot" hidden>
+        <div class="toolbar center">
+          <button id="shot-take" type="button" class="btn primary">Take screenshot</button>
+          <div class="field">
+            <label class="sr-only" for="shot-width">Width</label>
+            <select id="shot-width" aria-label="Width">
+              <option value="960">Width 960</option>
+              <option value="1280" selected>Width 1280</option>
+              <option value="1920">Width 1920</option>
+            </select>
+          </div>
+          <label class="check"><input id="shot-focus" type="checkbox"> Bring the window to the front</label>
+          <label class="check"><input id="shot-live" type="checkbox"> Refresh every 3 seconds</label>
+          <a id="shot-download" class="btn" download="roblox.jpg" hidden>Download</a>
+        </div>
+        <p class="hint">Captures the Roblox window on the computer that runs the bridge. Windows only, and the window must be visible.</p>
+        <p id="shot-status" class="status-line" role="status"></p>
+        <div class="shot-frame" id="shot-frame"><span id="shot-empty" class="muted">No screenshot yet.</span><img id="shot-img" alt="Screenshot of the Roblox window" hidden></div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<dialog id="token-dialog" aria-labelledby="token-title">
+  <form id="token-form" method="dialog">
+    <h2 id="token-title">Token required</h2>
+    <p class="muted">This bridge was started with BRIDGE_TOKEN. Paste the same value to continue. It is kept for this browser tab only.</p>
+    <div class="field">
+      <label for="token-input">Token</label>
+      <input id="token-input" type="password" autocomplete="off" spellcheck="false">
+    </div>
+    <p id="token-error" class="status-line error" hidden>That token was not accepted.</p>
+    <div class="actions">
+      <button type="button" id="token-cancel" class="btn">Cancel</button>
+      <button type="submit" id="token-save" class="btn primary" value="save">Continue</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+(function () {
+  "use strict";
+
+  var $ = function (id) { return document.getElementById(id); };
+  var POLL_STATUS_MS = 2000;
+  var POLL_LOGS_MS = 1000;
+  var POLL_ERRORS_MS = 2000;
+  var MAX_LOG_ROWS = 1500;
+  var MAX_ERROR_CARDS = 200;
+
+  var state = {
+    token: "",
+    online: false,
+    bridge: null,
+    clients: [],
+    selected: "auto",
+    tab: "logs",
+    startedAt: 0,
+    authPrompted: false
+  };
+
+  /* Browser storage can be blocked, so every access is wrapped. */
+  function store(key, value) {
+    try {
+      if (value === undefined) return window.localStorage.getItem(key);
+      window.localStorage.setItem(key, value);
+    } catch (e) { /* ignore */ }
+    return null;
+  }
+  function session(key, value) {
+    try {
+      if (value === undefined) return window.sessionStorage.getItem(key);
+      window.sessionStorage.setItem(key, value);
+    } catch (e) { /* ignore */ }
+    return null;
+  }
+
+  function ApiError(kind, message, status) {
+    this.kind = kind;
+    this.message = message;
+    this.status = status || 0;
+  }
+
+  function api(method, path, body, timeoutMs) {
+    var headers = { "x-superbase-client": "dashboard" };
+    if (state.token) headers["x-bridge-token"] = state.token;
+    if (body !== undefined) headers["content-type"] = "application/json";
+
+    var controller = new AbortController();
+    var timer = setTimeout(function () { controller.abort(); }, timeoutMs || 20000);
+
+    return fetch(path, {
+      method: method,
+      headers: headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: controller.signal,
+      cache: "no-store"
+    }).then(function (response) {
+      return response.json().catch(function () { return null; }).then(function (data) {
+        if (response.status === 401) throw new ApiError("auth", "The bridge needs a token.", 401);
+        if (!response.ok) throw new ApiError("http", (data && data.error) || ("HTTP " + response.status), response.status);
+        return data;
+      });
+    }, function (error) {
+      if (error && error.name === "AbortError") throw new ApiError("offline", "The bridge did not answer in time.");
+      throw new ApiError("offline", "Cannot reach the bridge.");
+    }).then(function (data) {
+      clearTimeout(timer);
+      return data;
+    }, function (error) {
+      clearTimeout(timer);
+      throw error;
+    });
+  }
+
+  function clientParam() {
+    return state.selected !== "auto" ? state.selected : undefined;
+  }
+
+  function pad(number, size) {
+    var text = String(number);
+    while (text.length < size) text = "0" + text;
+    return text;
+  }
+  function clock(ms) {
+    var d = new Date(ms);
+    return pad(d.getHours(), 2) + ":" + pad(d.getMinutes(), 2) + ":" + pad(d.getSeconds(), 2) + "." + pad(d.getMilliseconds(), 3);
+  }
+  function duration(seconds) {
+    if (seconds < 60) return seconds + "s";
+    var minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return minutes + "m " + (seconds % 60) + "s";
+    return Math.floor(minutes / 60) + "h " + (minutes % 60) + "m";
+  }
+  function ago(ms) {
+    if (ms < 1500) return "just now";
+    return duration(Math.round(ms / 1000)) + " ago";
+  }
+  function el(tag, className, text) {
+    var node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  }
+  function describeValue(value) {
+    if (value === null || value === undefined) return "nil";
+    if (typeof value === "string") return value;
+    if (typeof value === "object") return JSON.stringify(value, null, 2);
+    return String(value);
+  }
+
+  /* ------------------------------------------------------------ theme */
+  function effectiveTheme() {
+    var set = document.documentElement.getAttribute("data-theme");
+    if (set) return set;
+    return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  }
+  function renderTheme() {
+    $("theme").textContent = effectiveTheme() === "dark" ? "Light theme" : "Dark theme";
+  }
+  function initTheme() {
+    var saved = store("superbase-theme");
+    if (saved === "light" || saved === "dark") document.documentElement.setAttribute("data-theme", saved);
+    renderTheme();
+    $("theme").addEventListener("click", function () {
+      var next = effectiveTheme() === "dark" ? "light" : "dark";
+      document.documentElement.setAttribute("data-theme", next);
+      store("superbase-theme", next);
+      renderTheme();
+    });
+    if (window.matchMedia) {
+      var query = window.matchMedia("(prefers-color-scheme: dark)");
+      var listener = function () { renderTheme(); };
+      if (query.addEventListener) query.addEventListener("change", listener);
+    }
+  }
+
+  /* ----------------------------------------------------------- banner */
+  var bannerAction = null;
+  function showBanner(kind, text, actionLabel, action) {
+    var banner = $("banner");
+    banner.className = "banner " + kind;
+    $("banner-text").textContent = text;
+    var button = $("banner-action");
+    if (actionLabel) {
+      button.textContent = actionLabel;
+      button.hidden = false;
+      bannerAction = action;
+    } else {
+      button.hidden = true;
+      bannerAction = null;
+    }
+    banner.hidden = false;
+  }
+  function hideBanner() { $("banner").hidden = true; }
+  $("banner-action").addEventListener("click", function () { if (bannerAction) bannerAction(); });
+
+  /* ------------------------------------------------------------ token */
+  function askForToken(failed) {
+    var dialog = $("token-dialog");
+    $("token-error").hidden = !failed;
+    if (typeof dialog.showModal === "function") {
+      if (!dialog.open) dialog.showModal();
+      $("token-input").focus();
+    }
+  }
+  $("token-cancel").addEventListener("click", function () {
+    $("token-dialog").close();
+    showBanner("error", "The bridge needs a token, so this page cannot show any data.", "Enter token", function () { askForToken(false); });
+  });
+  $("token-form").addEventListener("submit", function (event) {
+    event.preventDefault();
+    var value = $("token-input").value.trim();
+    if (!value) return;
+    state.token = value;
+    session("superbase-token", value);
+    $("token-dialog").close();
+    $("token-input").value = "";
+    state.authPrompted = false;
+    refreshStatus();
+  });
+
+  /* ----------------------------------------------------------- status */
+  function resetData() {
+    logs.rows = [];
+    logs.lastId = 0;
+    logs.lastTime = 0;
+    logs.loaded = false;
+    $("log-list").textContent = "";
+    errors.lastId = 0;
+    errors.lastTime = 0;
+    errors.loaded = false;
+    errors.items = [];
+    $("error-list").textContent = "";
+    renderLogs();
+    renderErrors();
+  }
+
+  function refreshStatus() {
+    return api("GET", "/status", undefined, 6000).then(function (status) {
+      var wasOffline = !state.online;
+      state.online = true;
+      state.authPrompted = false;
+      if (wasOffline) {
+        hideBanner();
+        renderLogs();
+        renderErrors();
+        pollLogs();
+        pollErrors();
+      }
+
+      var startedAt = Date.now() - status.bridgeUptimeSec * 1000;
+      if (state.startedAt && Math.abs(startedAt - state.startedAt) > 6000) {
+        resetData();
+      }
+      state.startedAt = startedAt;
+
+      state.bridge = status;
+      state.clients = status.clients || [];
+      if (state.selected !== "auto" && !state.clients.some(function (c) { return c.id === state.selected; })) {
+        showBanner("info", "Client " + state.selected + " disconnected. Using the newest client instead.", "Dismiss", hideBanner);
+        state.selected = "auto";
+      }
+      renderStatus();
+      renderClients();
+      renderAvailability();
+    }, function (error) {
+      if (error.kind === "auth") {
+        state.online = false;
+        if (!state.authPrompted) {
+          state.authPrompted = true;
+          askForToken(Boolean(state.token));
+        }
+        return;
+      }
+      state.online = false;
+      state.clients = [];
+      showBanner("error", "Cannot reach the bridge. Is it running? Start it with npm start. This page keeps retrying.", "Retry now", refreshStatus);
+      setBridge("offline", "Bridge offline", ["Start it with npm start."]);
+      renderClients();
+      renderAvailability();
+    });
+  }
+
+  function renderStatus() {
+    var b = state.bridge;
+    if (!b) return;
+    setBridge("online", "Bridge " + b.bridgeVersion, [
+      "Up " + duration(b.bridgeUptimeSec) + ", " + b.mode + " mode",
+      state.clients.length + (state.clients.length === 1 ? " client" : " clients"),
+      "Local only, " + location.host
+    ]);
+
+    $("count-logs").textContent = String(b.logCount);
+    $("count-errors").textContent = String(b.errorCount);
+    $("count-errors").className = "count" + (b.errorCount > 0 ? " has-errors" : "");
+  }
+
+  /* The bridge block in the rail: a status dot, a title and a few detail lines. */
+  function setBridge(kind, title, details) {
+    var info = $("bridge-info");
+    info.setAttribute("data-state", kind);
+    info.textContent = "";
+    var name = el("span", "name");
+    name.appendChild(el("span", "dot"));
+    name.lastChild.setAttribute("aria-hidden", "true");
+    name.appendChild(el("strong", "", title));
+    info.appendChild(name);
+    details.forEach(function (line) { info.appendChild(el("span", "detail", line)); });
+  }
+
+  function selectedClientInfo() {
+    if (state.selected !== "auto") {
+      return state.clients.filter(function (c) { return c.id === state.selected; })[0] || null;
+    }
+    return state.clients.filter(function (c) { return c.isDefault; })[0] || state.clients[state.clients.length - 1] || null;
+  }
+
+  function renderClients() {
+    var box = $("clients");
+
+    /* Keep keyboard focus on the same chip when the strip is rebuilt by the poll. */
+    var focused = document.activeElement && document.activeElement.parentNode === box ? document.activeElement.getAttribute("data-id") : null;
+    var kind = !state.online ? "offline" : state.clients.length === 0 ? "empty" : "list";
+    if (kind !== "list" && box.getAttribute("data-kind") === kind) return;
+    box.setAttribute("data-kind", kind);
+    box.textContent = "";
+    $("clients-hint").hidden = kind !== "list";
+
+    if (!state.online) {
+      var offline = el("div", "loader-box");
+      offline.appendChild(el("strong", "", "The bridge is not reachable."));
+      offline.appendChild(el("p", "muted", "Start it with npm start in the Superbase folder. Clients show up here as soon as it runs."));
+      box.appendChild(offline);
+      return;
+    }
+
+    if (state.clients.length === 0) {
+      var empty = el("div", "loader-box");
+      empty.appendChild(el("strong", "", "No Roblox client is connected yet."));
+      empty.appendChild(el("p", "muted", "Join a game and run this in your executor:"));
+      var line = el("div", "loader-line");
+      var loader = state.bridge && state.bridge.clientUrl ? 'loadstring(game:HttpGet("' + state.bridge.clientUrl + '"))()' : "Execute roblox/client.lua in your executor.";
+      line.appendChild(el("code", "", loader));
+      if (state.bridge && state.bridge.clientUrl) {
+        var copy = el("button", "btn", "Copy");
+        copy.type = "button";
+        copy.addEventListener("click", function () { copyText(loader, copy); });
+        line.appendChild(copy);
+      }
+      empty.appendChild(line);
+      box.appendChild(empty);
+      return;
+    }
+
+    var auto = el("button", "client");
+    auto.type = "button";
+    auto.setAttribute("data-id", "auto");
+    auto.setAttribute("aria-pressed", state.selected === "auto" ? "true" : "false");
+    var autoStack = el("span", "stack");
+    autoStack.appendChild(el("span", "who", "Automatic"));
+    autoStack.appendChild(el("span", "meta", "Always the newest client"));
+    auto.appendChild(autoStack);
+    auto.addEventListener("click", function () { selectClient("auto"); });
+    if (state.clients.length > 1) box.appendChild(auto);
+
+    state.clients.forEach(function (client) {
+      var card = el("button", "client");
+      card.type = "button";
+      card.setAttribute("data-id", client.id);
+      card.setAttribute("aria-pressed", state.selected === client.id ? "true" : "false");
+      var dot = el("span", "dot");
+      dot.setAttribute("aria-hidden", "true");
+      card.appendChild(dot);
+      var stack = el("span", "stack");
+      stack.appendChild(el("span", "who", (client.userName || "Unknown player") + " (" + client.id + ")"));
+      var details = [];
+      if (client.placeId) details.push("Place " + client.placeId);
+      if (client.executor) details.push(client.executor);
+      if (typeof client.latencyMs === "number") details.push(client.latencyMs + " ms");
+      stack.appendChild(el("span", "meta", details.join(", ") || "No details"));
+      card.appendChild(stack);
+      if (client.isDefault) card.appendChild(el("span", "tag", "Newest"));
+      card.title = "Seen " + ago(client.lastSeenMsAgo);
+      card.addEventListener("click", function () { selectClient(client.id); });
+      box.appendChild(card);
+    });
+
+    if (focused) {
+      var again = box.querySelector('[data-id="' + focused + '"]');
+      if (again) again.focus();
+    }
+
+    $("clients-hint").textContent = state.selected === "auto"
+      ? "Tools use the newest client. Pick one to lock it."
+      : "Tools use " + state.selected + ".";
+  }
+
+  function selectClient(id) {
+    state.selected = id;
+    renderClients();
+    renderAvailability();
+    renderLogs();
+    renderErrors();
+  }
+
+  function copyText(text, button) {
+    var done = function (message) {
+      var old = button.textContent;
+      button.textContent = message;
+      setTimeout(function () { button.textContent = old; }, 1500);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { done("Copied"); }, function () { done("Select and copy"); });
+    } else {
+      done("Select and copy");
+    }
+  }
+
+  /* Run and Open need a connected client. */
+  function renderAvailability() {
+    var has = state.online && Boolean(selectedClientInfo());
+    $("lua-run").disabled = !has;
+    $("explorer-go").disabled = !has;
+    $("props-form").querySelector("button").disabled = !has;
+    $("lua-hint").textContent = has
+      ? "Code runs with your executor's full permissions."
+      : "Connect a Roblox client to run code.";
+    if (!has && explorer.loaded) {
+      /* keep the last view, but make clear it is stale */
+    }
+    if (!explorer.loaded) {
+      $("explorer-state").textContent = has ? "Open a path to look around." : "Connect a Roblox client, then open a path.";
+    }
+  }
+
+  /* ------------------------------------------------------------- tabs */
+  var tabNames = ["logs", "errors", "console", "explorer", "screenshot"];
+  function selectTab(name, focus) {
+    state.tab = name;
+    tabNames.forEach(function (tabName) {
+      var selected = tabName === name;
+      var tab = $("tab-" + tabName);
+      tab.setAttribute("aria-selected", selected ? "true" : "false");
+      tab.tabIndex = selected ? 0 : -1;
+      $("panel-" + tabName).hidden = !selected;
+      if (selected && focus) tab.focus();
+    });
+    if (name === "logs") pollLogs();
+    if (name === "errors") pollErrors();
+    if (name !== "screenshot") stopLive();
+    if (name === "explorer" && !explorer.loaded && selectedClientInfo()) loadExplorer($("explorer-path").value);
+    store("superbase-tab", name);
+  }
+  tabNames.forEach(function (name, index) {
+    var tab = $("tab-" + name);
+    tab.addEventListener("click", function () { selectTab(name, false); });
+    tab.addEventListener("keydown", function (event) {
+      var target = null;
+      if (event.key === "ArrowRight" || event.key === "ArrowDown") target = (index + 1) % tabNames.length;
+      else if (event.key === "ArrowLeft" || event.key === "ArrowUp") target = (index + tabNames.length - 1) % tabNames.length;
+      else if (event.key === "Home") target = 0;
+      else if (event.key === "End") target = tabNames.length - 1;
+      if (target !== null) {
+        event.preventDefault();
+        selectTab(tabNames[target], true);
+      }
+    });
+  });
+
+  /* The tab list is vertical in the rail and horizontal on narrow windows. */
+  if (window.matchMedia) {
+    var narrow = window.matchMedia("(max-width: 820px)");
+    var setOrientation = function () {
+      document.querySelector('[role="tablist"]').setAttribute("aria-orientation", narrow.matches ? "horizontal" : "vertical");
+    };
+    setOrientation();
+    if (narrow.addEventListener) narrow.addEventListener("change", setOrientation);
+  }
+
+  /* ------------------------------------------------------------- logs */
+  var logs = { rows: [], lastId: 0, lastTime: 0, loaded: false, paused: false, busy: false, failed: null };
+
+  function logVisible(entry) {
+    var level = $("log-level").value;
+    var text = $("log-search").value.trim().toLowerCase();
+    if (state.selected !== "auto" && entry.client !== state.selected) return false;
+    if (level && entry.level !== level) return false;
+    if (text && (entry.message + " " + entry.client).toLowerCase().indexOf(text) === -1) return false;
+    return true;
+  }
+
+  function buildLogRow(entry) {
+    var row = el("div", "log-row mono " + entry.level + (entry.history ? " history" : ""));
+    var head = el("span", "head");
+    head.appendChild(el("span", "t", clock(entry.time)));
+    head.appendChild(el("span", "lvl", entry.level));
+    head.appendChild(el("span", "c", entry.client || ""));
+    row.appendChild(head);
+    row.appendChild(el("span", "m", entry.message));
+    return row;
+  }
+
+  function renderLogs() {
+    var list = $("log-list");
+    var stateBox = $("log-state");
+    var shown = 0;
+
+    list.textContent = "";
+    logs.rows.forEach(function (entry) {
+      if (logVisible(entry)) {
+        list.appendChild(buildLogRow(entry));
+        shown += 1;
+      }
+    });
+
+    if (logs.failed) {
+      stateBox.className = "state-box error";
+      stateBox.textContent = logs.failed;
+      stateBox.hidden = false;
+      list.hidden = true;
+    } else if (!logs.loaded) {
+      stateBox.className = "state-box";
+      stateBox.textContent = state.online ? "Loading logs..." : "Waiting for the bridge...";
+      stateBox.hidden = false;
+      list.hidden = true;
+    } else if (shown === 0) {
+      stateBox.className = "state-box";
+      stateBox.textContent = "";
+      var strong = el("strong", "", logs.rows.length === 0 ? "No console lines yet." : "No lines match the filters.");
+      stateBox.appendChild(strong);
+      stateBox.appendChild(document.createTextNode(logs.rows.length === 0 ? "Output from the game appears here as it happens." : logs.rows.length + " stored lines are hidden by the level, search or client filter."));
+      stateBox.hidden = false;
+      list.hidden = true;
+    } else {
+      stateBox.hidden = true;
+      list.hidden = false;
+      if ($("log-scroll").checked) list.scrollTop = list.scrollHeight;
+    }
+    $("log-count").textContent = logs.loaded ? "Showing " + shown + " of " + logs.rows.length + " lines" + (logs.paused ? ". Paused." : ".") : "";
+  }
+
+  function appendLogs(fresh) {
+    var list = $("log-list");
+    fresh.forEach(function (entry) {
+      logs.rows.push(entry);
+      if (logVisible(entry)) list.appendChild(buildLogRow(entry));
+    });
+    if (logs.rows.length > MAX_LOG_ROWS) logs.rows.splice(0, logs.rows.length - MAX_LOG_ROWS);
+    while (list.childNodes.length > MAX_LOG_ROWS) list.removeChild(list.firstChild);
+  }
+
+  function pollLogs() {
+    if (!state.online || logs.paused || logs.busy || state.tab !== "logs" || document.hidden) return Promise.resolve();
+    logs.busy = true;
+    var query = new URLSearchParams({ limit: logs.loaded ? "300" : "500" });
+    if (logs.loaded) query.set("since", String(logs.lastTime));
+    return api("GET", "/logs?" + query.toString()).then(function (data) {
+      var fresh = data.logs.filter(function (entry) { return entry.id > logs.lastId; });
+      if (data.logs.length > 0) {
+        var last = data.logs[data.logs.length - 1];
+        logs.lastId = Math.max(logs.lastId, last.id);
+        logs.lastTime = Math.max(logs.lastTime, last.time);
+      }
+      logs.failed = null;
+      if (!logs.loaded) {
+        logs.loaded = true;
+        logs.rows = fresh;
+        renderLogs();
+      } else if (fresh.length > 0) {
+        var wasEmpty = $("log-list").hidden;
+        appendLogs(fresh);
+        if (wasEmpty) renderLogs();
+        else {
+          var listNode = $("log-list");
+          if ($("log-scroll").checked) listNode.scrollTop = listNode.scrollHeight;
+          $("log-count").textContent = "Showing " + listNode.childNodes.length + " of " + logs.rows.length + " lines.";
+        }
+      }
+    }, function (error) {
+      if (error.kind !== "offline" && error.kind !== "auth") {
+        logs.failed = "Could not read the logs: " + error.message;
+        renderLogs();
+      }
+    }).then(function () { logs.busy = false; });
+  }
+
+  ["log-level", "log-search"].forEach(function (id) {
+    $(id).addEventListener("input", renderLogs);
+  });
+  $("log-scroll").addEventListener("change", function () {
+    if (this.checked) { var l = $("log-list"); l.scrollTop = l.scrollHeight; }
+  });
+  $("log-pause").addEventListener("click", function () {
+    logs.paused = !logs.paused;
+    this.textContent = logs.paused ? "Resume" : "Pause";
+    this.setAttribute("aria-pressed", logs.paused ? "true" : "false");
+    if (!logs.paused) pollLogs();
+    renderLogs();
+  });
+  $("log-clear").addEventListener("click", function () {
+    var body = clientParam() ? { client: clientParam() } : {};
+    api("POST", "/clear", body).then(function () {
+      logs.rows = logs.rows.filter(function (entry) { return clientParam() && entry.client !== clientParam(); });
+      renderLogs();
+      refreshStatus();
+    }, function (error) {
+      logs.failed = "Could not clear the logs: " + error.message;
+      renderLogs();
+    });
+  });
+
+  /* ----------------------------------------------------------- errors */
+  var errors = { items: [], lastId: 0, lastTime: 0, loaded: false, busy: false, failed: null };
+
+  function errorVisible(item) {
+    var text = $("error-search").value.trim().toLowerCase();
+    if (state.selected !== "auto" && item.client !== state.selected) return false;
+    if (text && (item.message + " " + (item.script || "") + " " + item.trace).toLowerCase().indexOf(text) === -1) return false;
+    return true;
+  }
+
+  function buildErrorCard(item) {
+    var card = el("article", "error-card");
+    var head = el("div", "head");
+    head.appendChild(el("span", "mono", clock(item.time)));
+    if (item.client) head.appendChild(el("span", "", "Client " + item.client));
+    if (item.script) head.appendChild(el("span", "mono", item.script));
+    card.appendChild(head);
+    card.appendChild(el("p", "msg", item.message));
+    if (item.trace) card.appendChild(el("pre", "mono", item.trace));
+    return card;
+  }
+
+  function renderErrors() {
+    var list = $("error-list");
+    var box = $("error-state");
+    list.textContent = "";
+    var shown = 0;
+    errors.items.slice().reverse().forEach(function (item) {
+      if (errorVisible(item)) { list.appendChild(buildErrorCard(item)); shown += 1; }
+    });
+
+    if (errors.failed) {
+      box.className = "state-box error";
+      box.textContent = errors.failed;
+      box.hidden = false;
+      list.hidden = true;
+    } else if (!errors.loaded) {
+      box.className = "state-box";
+      box.textContent = state.online ? "Loading errors..." : "Waiting for the bridge...";
+      box.hidden = false;
+      list.hidden = true;
+    } else if (shown === 0) {
+      box.className = "state-box";
+      box.textContent = "";
+      box.appendChild(el("strong", "", errors.items.length === 0 ? "No script errors captured." : "No errors match the filters."));
+      box.appendChild(document.createTextNode(errors.items.length === 0 ? "Errors from the game's scripts show up here with their stack trace." : errors.items.length + " stored errors are hidden by the search or client filter."));
+      box.hidden = false;
+      list.hidden = true;
+    } else {
+      box.hidden = true;
+      list.hidden = false;
+    }
+  }
+
+  function pollErrors() {
+    if (!state.online || errors.busy || state.tab !== "errors" || document.hidden) return Promise.resolve();
+    errors.busy = true;
+    var query = new URLSearchParams({ limit: "200" });
+    if (errors.loaded) query.set("since", String(errors.lastTime));
+    return api("GET", "/errors?" + query.toString()).then(function (data) {
+      var fresh = data.errors.filter(function (item) { return item.id > errors.lastId; });
+      if (data.errors.length > 0) {
+        var last = data.errors[data.errors.length - 1];
+        errors.lastId = Math.max(errors.lastId, last.id);
+        errors.lastTime = Math.max(errors.lastTime, last.time);
+      }
+      errors.failed = null;
+      var changed = !errors.loaded || fresh.length > 0;
+      errors.loaded = true;
+      errors.items = errors.items.concat(fresh);
+      if (errors.items.length > MAX_ERROR_CARDS) errors.items.splice(0, errors.items.length - MAX_ERROR_CARDS);
+      if (changed) renderErrors();
+    }, function (error) {
+      if (error.kind !== "offline" && error.kind !== "auth") {
+        errors.failed = "Could not read the errors: " + error.message;
+        renderErrors();
+      }
+    }).then(function () { errors.busy = false; });
+  }
+
+  $("error-search").addEventListener("input", renderErrors);
+  $("error-clear").addEventListener("click", function () {
+    var body = clientParam() ? { client: clientParam() } : {};
+    api("POST", "/clear", body).then(function () {
+      errors.items = errors.items.filter(function (item) { return clientParam() && item.client !== clientParam(); });
+      renderErrors();
+      refreshStatus();
+    }, function (error) {
+      errors.failed = "Could not clear the errors: " + error.message;
+      renderErrors();
+    });
+  });
+
+  /* ---------------------------------------------------------- run Lua */
+  var HISTORY_KEY = "superbase-lua-history";
+  var luaHistory = [];
+
+  function loadHistory() {
+    try { luaHistory = JSON.parse(store(HISTORY_KEY) || "[]"); } catch (e) { luaHistory = []; }
+    if (!Array.isArray(luaHistory)) luaHistory = [];
+    renderHistory();
+  }
+  function renderHistory() {
+    var select = $("lua-history");
+    select.textContent = "";
+    var first = el("option", "", luaHistory.length ? "Recent code" : "No recent code");
+    first.value = "";
+    select.appendChild(first);
+    luaHistory.forEach(function (code, index) {
+      var option = el("option", "", code.replace(/\s+/g, " ").slice(0, 60));
+      option.value = String(index);
+      select.appendChild(option);
+    });
+    select.disabled = luaHistory.length === 0;
+  }
+  function remember(code) {
+    luaHistory = [code].concat(luaHistory.filter(function (item) { return item !== code; })).slice(0, 15);
+    store(HISTORY_KEY, JSON.stringify(luaHistory));
+    renderHistory();
+  }
+  $("lua-history").addEventListener("change", function () {
+    var item = luaHistory[Number(this.value)];
+    if (this.value !== "" && item !== undefined) { $("lua-code").value = item; $("lua-code").focus(); }
+    this.value = "";
+  });
+
+  function setOutput(text, isError) {
+    var out = $("lua-output");
+    out.textContent = text;
+    out.className = "output mono" + (isError ? " error" : "");
+    out.hidden = false;
+  }
+  function setLuaStatus(text, kind) {
+    var line = $("lua-status");
+    line.textContent = text;
+    line.className = "status-line" + (kind ? " " + kind : "");
+  }
+
+  function runLua() {
+    var button = $("lua-run");
+    var code = $("lua-code").value;
+    if (button.disabled) return;
+    if (!code.trim()) {
+      setLuaStatus("Enter some code first.", "error");
+      $("lua-code").focus();
+      return;
+    }
+
+    var timeout = Number($("lua-timeout").value);
+    var body = { code: code, timeout_ms: timeout };
+    if (clientParam()) body.client = clientParam();
+
+    button.disabled = true;
+    setLuaStatus("Running...", "");
+    $("lua-output").hidden = true;
+    var started = performance.now();
+    remember(code);
+
+    api("POST", "/exec", body, timeout + 5000).then(function (result) {
+      var took = Math.round(performance.now() - started) + " ms";
+      if (result.ok) {
+        var values = result.value || [];
+        setOutput(values.length === 0 ? "(no return value)" : values.map(describeValue).join("\n"), false);
+        setLuaStatus("Finished in " + took + ".", "ok");
+      } else {
+        setOutput(result.error || "The code failed.", true);
+        setLuaStatus("The code raised an error after " + took + ".", "error");
+      }
+    }, function (error) {
+      setOutput(error.message, true);
+      setLuaStatus("Could not run the code.", "error");
+    }).then(function () { renderAvailability(); });
+  }
+  $("lua-run").addEventListener("click", runLua);
+  $("lua-code").addEventListener("keydown", function (event) {
+    if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+      event.preventDefault();
+      runLua();
+    }
+  });
+  $("lua-clear").addEventListener("click", function () {
+    $("lua-output").hidden = true;
+    setLuaStatus("", "");
+  });
+
+  /* --------------------------------------------------------- explorer */
+  var explorer = { path: "game", loaded: false, busy: false };
+
+  function renderCrumbs(path) {
+    var nav = $("crumbs");
+    nav.textContent = "";
+    var parts = path.split(".").filter(Boolean);
+    if (parts[0] !== "game") parts.unshift("game");
+    parts.forEach(function (part, index) {
+      var target = parts.slice(0, index + 1).join(".");
+      var button = el("button", "", part);
+      button.type = "button";
+      if (index === parts.length - 1) button.setAttribute("aria-current", "page");
+      else button.addEventListener("click", function () { $("explorer-path").value = target; loadExplorer(target); });
+      nav.appendChild(button);
+      if (index < parts.length - 1) nav.appendChild(el("span", "sep", ">"));
+    });
+  }
+
+  function loadExplorer(path) {
+    path = (path || "game").trim() || "game";
+    var names = $("props-input").value.split(",").map(function (name) { return name.trim(); }).filter(Boolean);
+    var body = { path: path, properties: names };
+    if (clientParam()) body.client = clientParam();
+
+    var box = $("explorer-state");
+    box.className = "state-box";
+    box.textContent = "Loading " + path + "...";
+    box.hidden = false;
+    $("explorer-body").hidden = true;
+    explorer.busy = true;
+    renderCrumbs(path);
+
+    api("POST", "/inspect", body, 30000).then(function (result) {
+      if (!result.ok) throw new ApiError("http", result.error || "Could not inspect that path.");
+      var info = result.value;
+      explorer.path = path;
+      explorer.loaded = true;
+
+      var children = $("children");
+      children.textContent = "";
+      (info.children || []).forEach(function (child) {
+        var button = el("button", "child");
+        button.type = "button";
+        button.appendChild(el("span", "n", child.name));
+        button.appendChild(el("span", "k", child.className));
+        if (child.name.indexOf(".") !== -1) {
+          button.disabled = true;
+          button.title = "Names that contain a dot cannot be opened by path.";
+        } else {
+          button.addEventListener("click", function () {
+            var next = path + "." + child.name;
+            $("explorer-path").value = next;
+            loadExplorer(next);
+          });
+        }
+        children.appendChild(button);
+      });
+      if (!children.firstChild) children.appendChild(el("p", "empty", "No children."));
+      $("children-title").textContent = "Children (" + (info.children || []).length + (info.childrenTruncated ? "+" : "") + ")";
+
+      var tbody = $("props").querySelector("tbody");
+      tbody.textContent = "";
+      var keys = Object.keys(info.properties || {});
+      keys.forEach(function (key) {
+        var row = el("tr");
+        row.appendChild(el("th", "", key));
+        var cell = el("td");
+        cell.appendChild(el("code", "", describeValue(info.properties[key])));
+        row.appendChild(cell);
+        tbody.appendChild(row);
+      });
+      var summary = el("tr");
+      summary.appendChild(el("th", "", "Class"));
+      var summaryCell = el("td");
+      summaryCell.appendChild(el("code", "", info.className));
+      summary.appendChild(summaryCell);
+      tbody.insertBefore(summary, tbody.firstChild);
+
+      box.hidden = true;
+      $("explorer-body").hidden = false;
+    }).catch(function (error) {
+      box.className = "state-box error";
+      box.textContent = "";
+      box.appendChild(el("strong", "", "Could not open " + path));
+      box.appendChild(document.createTextNode(error.message));
+      box.hidden = false;
+      $("explorer-body").hidden = true;
+    }).then(function () { explorer.busy = false; });
+  }
+
+  $("explorer-form").addEventListener("submit", function (event) {
+    event.preventDefault();
+    if (!$("explorer-go").disabled) loadExplorer($("explorer-path").value);
+  });
+  $("props-form").addEventListener("submit", function (event) {
+    event.preventDefault();
+    if (!$("props-form").querySelector("button").disabled) loadExplorer(explorer.path);
+  });
+
+  /* -------------------------------------------------------- screenshot */
+  var shot = { busy: false, timer: null };
+
+  function takeShot() {
+    if (shot.busy) return Promise.resolve();
+    shot.busy = true;
+    var button = $("shot-take");
+    button.disabled = true;
+    var query = new URLSearchParams({ max_width: $("shot-width").value });
+    if ($("shot-focus").checked) query.set("focus", "1");
+    var status = $("shot-status");
+    status.textContent = "Capturing...";
+    status.className = "status-line";
+
+    return api("GET", "/screenshot?" + query.toString(), undefined, 30000).then(function (data) {
+      var source = "data:" + data.mimeType + ";base64," + data.data;
+      $("shot-img").src = source;
+      $("shot-img").hidden = false;
+      $("shot-empty").hidden = true;
+      var link = $("shot-download");
+      link.href = source;
+      link.hidden = false;
+      status.textContent = data.width + " x " + data.height + (data.title ? ", window: " + data.title : "") + ". Taken at " + clock(Date.now()) + ".";
+      status.className = "status-line ok";
+    }, function (error) {
+      status.textContent = error.message;
+      status.className = "status-line error";
+      if (error.kind === "http") stopLive();
+    }).then(function () {
+      shot.busy = false;
+      button.disabled = false;
+    });
+  }
+
+  function stopLive() {
+    if (shot.timer) { clearInterval(shot.timer); shot.timer = null; }
+    $("shot-live").checked = false;
+  }
+  $("shot-take").addEventListener("click", takeShot);
+  $("shot-live").addEventListener("change", function () {
+    if (this.checked) {
+      takeShot();
+      shot.timer = setInterval(function () {
+        if (!document.hidden && state.tab === "screenshot") takeShot();
+      }, 3000);
+    } else {
+      stopLive();
+    }
+  });
+
+  /* ---------------------------------------------------------- logo */
+  $("logo").addEventListener("error", function () { this.hidden = true; });
+
+  /* ------------------------------------------------------------ start */
+  state.token = session("superbase-token") || "";
+  initTheme();
+  loadHistory();
+  renderClients();
+  renderAvailability();
+  renderLogs();
+  renderErrors();
+  var savedTab = store("superbase-tab");
+  if (savedTab && tabNames.indexOf(savedTab) !== -1) selectTab(savedTab, false);
+
+  refreshStatus();
+  setInterval(refreshStatus, POLL_STATUS_MS);
+  setInterval(pollLogs, POLL_LOGS_MS);
+  setInterval(pollErrors, POLL_ERRORS_MS);
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden) { refreshStatus(); pollLogs(); pollErrors(); }
+  });
+})();
+</script>
+</body>
+</html>

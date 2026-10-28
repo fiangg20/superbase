@@ -2,7 +2,7 @@
   <img src="assets/icon.png" alt="Superbase" width="256">
 </p>
 
-<h1 align="center">Superbase - New Update Incoming and Previews</h1>
+<h1 align="center">Superbase</h1>
 
 <p align="center">
   <strong>Let an AI assistant debug your live Roblox game.</strong>

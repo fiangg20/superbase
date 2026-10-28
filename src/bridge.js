@@ -1,10 +1,12 @@
 "use strict";
 
 // Superbase bridge.
-// - WebSocket endpoint for the executor client (roblox/client.lua).
+// - WebSocket endpoint for the executor clients (roblox/client.lua). Several Roblox clients can
+//   be connected at the same time, each one gets an id (c1, c2, ...).
 // - Local HTTP API used by the MCP server (or any other tool) to read logs and errors,
-//   send commands to the game and check the connection.
-// - Serves roblox/client.lua at /client.lua so the executor can load it with loadstring.
+//   send commands to a game, take screenshots and check the connection.
+// - Serves roblox/client.lua at /client.lua so the executor can load it with loadstring,
+//   and a small dashboard at /.
 // Everything binds to 127.0.0.1.
 //
 // Two modes:
@@ -19,14 +21,17 @@ const http = require("http");
 const path = require("path");
 const crypto = require("crypto");
 const { WebSocketServer } = require("ws");
+const { captureRobloxWindow, ScreenshotError } = require("./screenshot");
 
-const VERSION = "1.2.0";
+const VERSION = "1.3.0";
 const HOST = "127.0.0.1";
 const PORT = Number(process.env.SUPERBASE_PORT || process.env.BRIDGE_PORT || 9731);
 const TOKEN = process.env.SUPERBASE_TOKEN || process.env.BRIDGE_TOKEN || "";
 const OPEN_MODE = TOKEN === "";
 const MAX_ENTRIES = 1000;
-const REQUEST_TIMEOUT_MS = 15000;
+const DEFAULT_COMMAND_TIMEOUT_MS = 15000;
+const MIN_COMMAND_TIMEOUT_MS = 1000;
+const MAX_COMMAND_TIMEOUT_MS = 120000;
 const PROBE_TIMEOUT_MS = 3000;
 const MAX_BODY_BYTES = 1024 * 1024;
 const PING_INTERVAL_MS = Number(process.env.SUPERBASE_PING_MS || 10000);
@@ -37,6 +42,8 @@ const CLIENT_SCRIPT_CANDIDATES = [
   path.join(__dirname, "..", "roblox", "client.lua"),
   path.join(__dirname, "client.lua"),
 ];
+const DASHBOARD_FILE = path.join(__dirname, "dashboard.html");
+const ICON_FILE = path.join(__dirname, "..", "assets", "icon.png");
 
 if (!OPEN_MODE && (TOKEN === "PASTE_YOUR_TOKEN_HERE" || TOKEN.length < 16)) {
   console.error("BRIDGE_TOKEN must be at least 16 characters. Unset it to use open mode, or generate one with:");
@@ -46,9 +53,11 @@ if (!OPEN_MODE && (TOKEN === "PASTE_YOUR_TOKEN_HERE" || TOKEN.length < 16)) {
 
 const logs = [];
 const errors = [];
-const pending = new Map(); // command id -> { resolve, reject, timer }
-const pendingPings = new Map(); // ping id -> { sentAt, resolve?, reject?, timer? }
-let client = null;
+const clients = new Map(); // client id -> authenticated WebSocket, in connection order
+const pending = new Map(); // command id -> { resolve, reject, timer, ws }
+const pendingPings = new Map(); // ping id -> { sentAt, ws, resolve?, reject?, timer? }
+let clientSequence = 0;
+let entrySequence = 0; // gives every stored log and error a unique, increasing id
 let lastDisconnectAt = null;
 
 function findClientScript() {
@@ -71,56 +80,117 @@ function pushBounded(list, entry) {
   }
 }
 
+function removeWhere(list, predicate) {
+  for (let index = list.length - 1; index >= 0; index -= 1) {
+    if (predicate(list[index])) list.splice(index, 1);
+  }
+}
+
 function tokenMatches(provided) {
   const a = Buffer.from(String(provided || ""));
   const b = Buffer.from(TOKEN);
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
-function isLive() {
-  return Boolean(client && client.authenticated && client.readyState === 1);
+function isLive(ws) {
+  return Boolean(ws && ws.authenticated && ws.readyState === 1);
+}
+
+function liveClients() {
+  return [...clients.values()].filter(isLive);
+}
+
+// With no id, commands go to the client that connected last.
+function pickClient(id) {
+  if (id) {
+    const ws = clients.get(String(id));
+    return isLive(ws) ? ws : null;
+  }
+  const live = liveClients();
+  return live.length > 0 ? live[live.length - 1] : null;
+}
+
+function describeClients() {
+  const live = liveClients();
+  const fallback = live.length > 0 ? live[live.length - 1] : null;
+  const now = Date.now();
+  return live.map((ws) => ({
+    id: ws.id,
+    isDefault: ws === fallback,
+    placeId: ws.meta.placeId,
+    jobId: ws.meta.jobId,
+    userId: ws.userId,
+    userName: ws.userName,
+    executor: ws.executor,
+    clientVersion: ws.clientVersion,
+    connectedForSec: Math.round((now - ws.connectedAt) / 1000),
+    lastSeenMsAgo: now - ws.lastSeen,
+    latencyMs: typeof ws.latencyMs === "number" ? ws.latencyMs : null,
+  }));
+}
+
+function noClientError(id) {
+  if (id) {
+    const ids = liveClients().map((ws) => ws.id);
+    return new Error(`Unknown client '${id}'. Connected clients: ${ids.length > 0 ? ids.join(", ") : "none"}`);
+  }
+  return new Error("No executor is connected");
 }
 
 function cleanText(value) {
   return typeof value === "string" && value.length > 0 ? value.slice(0, 100) : null;
 }
 
-function rejectAllPending(reason) {
+function cleanNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function rejectAllPending(ws, reason) {
   for (const [id, entry] of pending) {
+    if (entry.ws !== ws) continue;
     clearTimeout(entry.timer);
     entry.reject(new Error(reason));
     pending.delete(id);
   }
   for (const [id, entry] of pendingPings) {
+    if (entry.ws !== ws) continue;
     if (entry.timer) clearTimeout(entry.timer);
     if (entry.reject) entry.reject(new Error(reason));
     pendingPings.delete(id);
   }
 }
 
-// Sends a command to the executor and resolves with { ok, value, error }.
-function sendCommand(type, payload) {
+function clampTimeout(raw) {
+  const number = Number(raw);
+  if (!Number.isFinite(number)) return DEFAULT_COMMAND_TIMEOUT_MS;
+  return Math.min(MAX_COMMAND_TIMEOUT_MS, Math.max(MIN_COMMAND_TIMEOUT_MS, Math.round(number)));
+}
+
+// Sends a command to an executor and resolves with { ok, value, error }.
+function sendCommand(type, payload, { client, timeoutMs = DEFAULT_COMMAND_TIMEOUT_MS } = {}) {
   return new Promise((resolve, reject) => {
-    if (!isLive()) {
-      reject(new Error("No executor is connected"));
+    const ws = pickClient(client);
+    if (!ws) {
+      reject(noClientError(client));
       return;
     }
 
     const id = crypto.randomUUID();
     const timer = setTimeout(() => {
       pending.delete(id);
-      reject(new Error("Timed out waiting for the executor"));
-    }, REQUEST_TIMEOUT_MS);
+      reject(new Error(`Timed out after ${Math.round(timeoutMs / 1000)} seconds waiting for the executor`));
+    }, timeoutMs);
 
-    pending.set(id, { resolve, reject, timer });
-    client.send(JSON.stringify({ ...payload, type, id }));
+    pending.set(id, { resolve, reject, timer, ws });
+    ws.send(JSON.stringify({ ...payload, type, id }));
   });
 }
 
-// Pings the executor and resolves with the round trip time in milliseconds.
-function probe() {
+// Pings an executor and resolves with the round trip time in milliseconds.
+function probe(ws) {
   return new Promise((resolve, reject) => {
-    if (!isLive()) {
+    if (!isLive(ws)) {
       reject(new Error("No executor is connected"));
       return;
     }
@@ -131,20 +201,25 @@ function probe() {
       reject(new Error("The executor did not answer the ping"));
     }, PROBE_TIMEOUT_MS);
 
-    pendingPings.set(id, { sentAt: Date.now(), resolve, reject, timer });
-    client.send(JSON.stringify({ type: "ping", id }));
+    pendingPings.set(id, { sentAt: Date.now(), ws, resolve, reject, timer });
+    ws.send(JSON.stringify({ type: "ping", id }));
   });
 }
 
 function handlePong(ws, message) {
   let id = message.id;
   if (id === undefined) {
-    // Older clients do not echo the ping id, so answer the oldest outstanding ping.
-    id = pendingPings.keys().next().value;
+    // Older clients do not echo the ping id, so answer the oldest outstanding ping of this client.
+    for (const [pendingId, entry] of pendingPings) {
+      if (entry.ws === ws) {
+        id = pendingId;
+        break;
+      }
+    }
   }
 
   const entry = pendingPings.get(id);
-  if (!entry) return;
+  if (!entry || entry.ws !== ws) return;
 
   pendingPings.delete(id);
   ws.latencyMs = Date.now() - entry.sentAt;
@@ -152,11 +227,13 @@ function handlePong(ws, message) {
   if (entry.resolve) entry.resolve(ws.latencyMs);
 }
 
-function handleClientMessage(message) {
+function handleClientMessage(ws, message) {
   switch (message.type) {
     case "log":
       pushBounded(logs, {
+        id: ++entrySequence,
         time: Date.now(),
+        client: ws.id,
         level: String(message.level || "info"),
         message: String(message.message ?? ""),
         history: message.history === true,
@@ -164,7 +241,9 @@ function handleClientMessage(message) {
       break;
     case "error":
       pushBounded(errors, {
+        id: ++entrySequence,
         time: Date.now(),
+        client: ws.id,
         message: String(message.message ?? ""),
         trace: String(message.trace ?? ""),
         script: message.script ? String(message.script) : null,
@@ -172,7 +251,7 @@ function handleClientMessage(message) {
       break;
     case "result": {
       const entry = pending.get(message.id);
-      if (entry) {
+      if (entry && entry.ws === ws) {
         clearTimeout(entry.timer);
         pending.delete(message.id);
         entry.resolve({
@@ -188,20 +267,27 @@ function handleClientMessage(message) {
   }
 }
 
-function connectionInfo() {
-  const live = isLive();
+// Describes the selected client (the requested one, or the one that connected last).
+function connectionInfo(requestedId, target) {
   const now = Date.now();
+  const unknown = Boolean(requestedId) && !target;
+  const live = Boolean(target);
   return {
-    state: live ? "connected" : "waiting_for_roblox",
+    state: unknown ? "unknown_client" : live ? "connected" : "waiting_for_roblox",
     connected: live,
     mode: OPEN_MODE ? "open" : "token",
     clientUrl: CLIENT_URL,
-    place: live ? client.meta : null,
-    executor: live ? client.executor : null,
-    clientVersion: live ? client.clientVersion : null,
-    connectedForSec: live ? Math.round((now - client.connectedAt) / 1000) : null,
-    lastSeenMsAgo: live ? now - client.lastSeen : null,
-    latencyMs: live && typeof client.latencyMs === "number" ? client.latencyMs : null,
+    selectedClient: live ? target.id : null,
+    requestedClient: requestedId || null,
+    clientCount: liveClients().length,
+    clients: describeClients(),
+    place: live ? target.meta : null,
+    executor: live ? target.executor : null,
+    clientVersion: live ? target.clientVersion : null,
+    userName: live ? target.userName : null,
+    connectedForSec: live ? Math.round((now - target.connectedAt) / 1000) : null,
+    lastSeenMsAgo: live ? now - target.lastSeen : null,
+    latencyMs: live && typeof target.latencyMs === "number" ? target.latencyMs : null,
     lastDisconnectedSecAgo: !live && lastDisconnectAt ? Math.round((now - lastDisconnectAt) / 1000) : null,
     logCount: logs.length,
     errorCount: errors.length,
@@ -211,14 +297,16 @@ function connectionInfo() {
 }
 
 // Filters stored entries by time (since, in ms, inclusive so nothing in the same millisecond is
-// missed), by text (contains) and, for logs, by level.
+// missed), by client, by text (contains) and, for logs, by level.
 function filterEntries(entries, url, useLevel) {
   const since = Number(url.searchParams.get("since")) || 0;
   const contains = (url.searchParams.get("contains") || "").slice(0, 200).toLowerCase();
   const level = useLevel ? url.searchParams.get("level") : null;
+  const client = url.searchParams.get("client");
 
   return entries.filter((entry) => {
     if (since && entry.time < since) return false;
+    if (client && entry.client !== client) return false;
     if (level && entry.level !== level) return false;
     if (contains && !`${entry.message}\n${entry.trace || ""}`.toLowerCase().includes(contains)) return false;
     return true;
@@ -246,6 +334,29 @@ function sendText(res, status, text) {
     "Cache-Control": "no-store",
   });
   res.end(text);
+}
+
+// The dashboard may only be shown as a top level page and only talks to this bridge.
+function sendDashboard(res) {
+  let html;
+  try {
+    html = fs.readFileSync(DASHBOARD_FILE);
+  } catch {
+    sendJson(res, 404, { error: "The dashboard file src/dashboard.html was not found" });
+    return;
+  }
+
+  res.writeHead(200, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Content-Length": html.length,
+    "Cache-Control": "no-store",
+    "Content-Security-Policy":
+      "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+    "X-Frame-Options": "DENY",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+  });
+  res.end(html);
 }
 
 function readJsonBody(req) {
@@ -322,6 +433,33 @@ const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${HOST}:${PORT}`);
     const route = `${req.method} ${url.pathname}`;
 
+    // The dashboard page itself holds no data, it loads everything through the API below.
+    if (route === "GET /") {
+      sendDashboard(res);
+      return;
+    }
+
+    // The dashboard shows the project icon when assets/icon.png exists. It is public, like the page.
+    if (route === "GET /icon.png") {
+      let icon;
+      try {
+        icon = fs.readFileSync(ICON_FILE);
+      } catch {
+        // No icon in this copy of the project: answer quietly, the page hides the image.
+        res.writeHead(204, { "Cache-Control": "no-store" });
+        res.end();
+        return;
+      }
+      res.writeHead(200, {
+        "Content-Type": "image/png",
+        "Content-Length": icon.length,
+        "Cache-Control": "max-age=3600",
+        "X-Content-Type-Options": "nosniff",
+      });
+      res.end(icon);
+      return;
+    }
+
     // The executor loads this with loadstring(game:HttpGet(...)), so it cannot send headers.
     if (route === "GET /client.lua") {
       const script = OPEN_MODE ? readClientScript() : null;
@@ -346,18 +484,22 @@ const server = http.createServer(async (req, res) => {
 
     if (route === "GET /status") {
       // With ?probe=1 the bridge pings the executor and reports whether it answered.
+      const requested = url.searchParams.get("client");
+      const target = pickClient(requested);
       let responsive = null;
-      if (url.searchParams.get("probe") === "1" && isLive()) {
+      if (url.searchParams.get("probe") === "1" && target) {
         try {
-          await probe();
+          await probe(target);
           responsive = true;
         } catch {
           responsive = false;
         }
       }
-      const info = connectionInfo();
+      const info = connectionInfo(requested, target);
       if (responsive !== null) info.responsive = responsive;
       sendJson(res, 200, info);
+    } else if (route === "GET /clients") {
+      sendJson(res, 200, { clients: describeClients() });
     } else if (route === "GET /logs") {
       const limit = clampLimit(url.searchParams.get("limit"), 100);
       sendJson(res, 200, { now: Date.now(), logs: filterEntries(logs, url, true).slice(-limit) });
@@ -365,21 +507,45 @@ const server = http.createServer(async (req, res) => {
       const limit = clampLimit(url.searchParams.get("limit"), 50);
       sendJson(res, 200, { now: Date.now(), errors: filterEntries(errors, url, false).slice(-limit) });
     } else if (route === "POST /clear") {
-      logs.length = 0;
-      errors.length = 0;
-      sendJson(res, 200, { cleared: true });
+      const body = await readJsonBody(req);
+      const only = typeof body.client === "string" && body.client.length > 0 ? body.client : null;
+      removeWhere(logs, (entry) => !only || entry.client === only);
+      removeWhere(errors, (entry) => !only || entry.client === only);
+      sendJson(res, 200, { cleared: true, client: only });
     } else if (route === "POST /exec") {
       const body = await readJsonBody(req);
       if (typeof body.code !== "string" || body.code.length === 0) {
         sendJson(res, 400, { error: "Field 'code' must be a non-empty string" });
         return;
       }
-      sendJson(res, 200, await sendCommand("exec", { code: body.code }));
+      sendJson(
+        res,
+        200,
+        await sendCommand("exec", { code: body.code }, { client: body.client, timeoutMs: clampTimeout(body.timeout_ms) }),
+      );
     } else if (route === "POST /inspect") {
       const body = await readJsonBody(req);
       const inspectPath = typeof body.path === "string" && body.path.length > 0 ? body.path : "game";
       const properties = Array.isArray(body.properties) ? body.properties.map(String) : [];
-      sendJson(res, 200, await sendCommand("inspect", { path: inspectPath, properties }));
+      sendJson(
+        res,
+        200,
+        await sendCommand(
+          "inspect",
+          { path: inspectPath, properties },
+          { client: body.client, timeoutMs: clampTimeout(body.timeout_ms) },
+        ),
+      );
+    } else if (route === "GET /screenshot") {
+      try {
+        const shot = await captureRobloxWindow({
+          maxWidth: url.searchParams.get("max_width") || undefined,
+          focus: url.searchParams.get("focus") === "1",
+        });
+        sendJson(res, 200, { ok: true, ...shot });
+      } catch (error) {
+        sendJson(res, error instanceof ScreenshotError ? error.status : 500, { error: error.message });
+      }
     } else {
       sendJson(res, 404, { error: "Not found" });
     }
@@ -423,28 +589,39 @@ wss.on("connection", (ws) => {
 
     if (!ws.authenticated) {
       if (message.type === "hello" && (OPEN_MODE || tokenMatches(message.token))) {
-        ws.authenticated = true;
-        clearTimeout(authTimer);
-
-        if (client && client !== ws) {
-          client.close(1000, "Replaced by a newer connection");
-        }
-        client = ws;
         ws.meta = { placeId: message.placeId ?? null, jobId: message.jobId ?? null };
+        ws.userId = cleanNumber(message.userId);
+        ws.userName = cleanText(message.userName);
         ws.executor = cleanText(message.executor);
         ws.clientVersion = cleanText(message.clientVersion);
+
+        // The same player in the same server that connects again replaces the old connection,
+        // for example after running the loader twice. Other clients stay connected.
+        if (ws.userId !== null) {
+          for (const other of liveClients()) {
+            if (other.userId === ws.userId && other.meta.jobId === ws.meta.jobId && other.meta.placeId === ws.meta.placeId) {
+              other.close(1000, "Replaced by a newer connection");
+            }
+          }
+        }
+
+        clientSequence += 1;
+        ws.id = `c${clientSequence}`;
+        ws.authenticated = true;
         ws.connectedAt = Date.now();
         ws.lastSeen = ws.connectedAt;
         ws.latencyMs = null;
+        clearTimeout(authTimer);
+        clients.set(ws.id, ws);
 
-        ws.send(JSON.stringify({ type: "welcome" }));
+        ws.send(JSON.stringify({ type: "welcome", clientId: ws.id }));
         console.log(
-          `[superbase] executor connected (placeId=${ws.meta.placeId}, executor=${ws.executor || "unknown"})`,
+          `[superbase] executor connected as ${ws.id} (placeId=${ws.meta.placeId}, executor=${ws.executor || "unknown"}, user=${ws.userName || "unknown"})`,
         );
 
         // Measure the first round trip shortly after the client finished sending its history.
         setTimeout(() => {
-          if (client === ws) probe().catch(() => {});
+          if (isLive(ws)) probe(ws).catch(() => {});
         }, 1000);
       } else {
         console.log("[superbase] rejected hello (wrong token or malformed message)");
@@ -458,16 +635,16 @@ wss.on("connection", (ws) => {
       handlePong(ws, message);
       return;
     }
-    handleClientMessage(message);
+    handleClientMessage(ws, message);
   });
 
   ws.on("close", () => {
     clearTimeout(authTimer);
-    if (client === ws) {
-      client = null;
+    if (ws.id && clients.get(ws.id) === ws) {
+      clients.delete(ws.id);
       lastDisconnectAt = Date.now();
-      rejectAllPending("Executor disconnected");
-      console.log("[superbase] executor disconnected");
+      rejectAllPending(ws, "Executor disconnected");
+      console.log(`[superbase] executor ${ws.id} disconnected`);
     }
   });
 
@@ -477,29 +654,32 @@ wss.on("connection", (ws) => {
 // Heartbeat: keeps the latency fresh and drops a client that went silent, for example
 // when the game was force closed and the socket never reported it.
 const heartbeat = setInterval(() => {
-  if (!isLive()) return;
-
   const now = Date.now();
-  if (now - client.lastSeen > STALE_AFTER_MS) {
-    console.log("[superbase] executor stopped responding, closing the connection");
-    client.terminate();
-    return;
+
+  for (const ws of liveClients()) {
+    if (now - ws.lastSeen > STALE_AFTER_MS) {
+      console.log(`[superbase] executor ${ws.id} stopped responding, closing the connection`);
+      ws.terminate();
+      continue;
+    }
+
+    const id = crypto.randomUUID();
+    pendingPings.set(id, { sentAt: now, ws });
+    ws.send(JSON.stringify({ type: "ping", id }));
   }
 
+  // Heartbeat pings carry no timer, so drop the ones that were never answered.
   for (const [id, entry] of pendingPings) {
     if (!entry.timer && now - entry.sentAt > STALE_AFTER_MS) {
       pendingPings.delete(id);
     }
   }
-
-  const id = crypto.randomUUID();
-  pendingPings.set(id, { sentAt: now });
-  client.send(JSON.stringify({ type: "ping", id }));
 }, PING_INTERVAL_MS);
 heartbeat.unref();
 
 server.listen(PORT, HOST, () => {
   console.log(`[superbase] bridge ${VERSION} listening on ws://${HOST}:${PORT} (HTTP API on the same port)`);
+  console.log(`[superbase] dashboard: http://${HOST}:${PORT}/`);
   if (OPEN_MODE) {
     console.log("[superbase] open mode: no token needed. Web pages are blocked, but any program on this computer can use the bridge.");
     console.log("[superbase] set BRIDGE_TOKEN to require a token instead.");

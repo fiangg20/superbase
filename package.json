@@ -1,19 +1,13 @@
 {
   "name": "superbase",
-  "version": "1.2.0",
-  "description": "Superbase: a local MCP server that connects AI assistants to a live Roblox executor session. Read console logs and errors, search and inspect the instance tree, read scripts and run Lua, with the connection status reported on every call.",
+  "version": "1.3.0",
+  "description": "Superbase: a local MCP server that connects AI assistants to live Roblox executor sessions. Read logs and errors, explore the instance tree with selectors, read and search scripts, spy on remotes, operate the GUI, take screenshots and run Lua, with a web dashboard and the connection status reported on every call.",
   "private": true,
-  "author": "Base Architect",
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/fiangg20/superbase.git"
-  },
   "main": "src/bridge.js",
   "scripts": {
     "start": "node src/bridge.js",
     "mcp": "node src/mcp-server.js",
-    "test": "node test/bridge.test.js && node test/mcp-server.test.js"
+    "test": "node test/selector.test.js && node test/screenshot.test.js && node test/lua.test.js && node test/lua-runtime.test.js && node test/bridge.test.js && node test/mcp-server.test.js"
   },
   "keywords": ["mcp", "roblox", "executor", "luau", "debugging", "ai"],
   "engines": {

@@ -7,12 +7,14 @@ const { spawn } = require("child_process");
 const readline = require("readline");
 const assert = require("assert");
 const path = require("path");
+const http = require("http");
 const WebSocket = require("ws");
 
 const BRIDGE = path.join(__dirname, "..", "src", "bridge.js");
 const MCP = path.join(__dirname, "..", "src", "mcp-server.js");
 const PORT = 19731;
 const TOKEN_PORT = 19732;
+const STUB_PORT = 19733;
 const TOKEN = "mcp-test-token-1234567890abcdef";
 const CLEAN_ENV = {
   SUPERBASE_PORT: "",
@@ -92,6 +94,11 @@ function decodeSnippet(code) {
     "search the instance tree": "find_instances",
     "read the source of a script": "get_script_source",
     "set a property on an instance": "set_property",
+    "print the instance tree": "get_hierarchy",
+    "list the scripts the game has": "list_scripts",
+    "search inside the source code": "search_scripts",
+    "record calls to RemoteEvent": "remote_spy",
+    "look at and operate the game's GUI": "gui_interact",
   };
   const found = Object.keys(names).find((needle) => body.includes(needle));
   return { name: found ? names[found] : "unknown", args: JSON.parse(Buffer.from(bytes).toString("utf8")) };
@@ -99,7 +106,7 @@ function decodeSnippet(code) {
 
 // Connects a fake executor. It answers exec (including the generated snippets), inspect and
 // (optionally) ping messages.
-function connectExecutor(port, { answerPings = true, token } = {}) {
+function connectExecutor(port, { answerPings = true, token, name = "Tester", userId = 1, delayMs = 0 } = {}) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}`);
     ws.on("error", reject);
@@ -111,18 +118,28 @@ function connectExecutor(port, { answerPings = true, token } = {}) {
         ws.send(JSON.stringify({ type: "pong", id: message.id }));
       } else if (message.type === "exec") {
         const snippet = decodeSnippet(message.code);
-        if (snippet) {
-          const value =
-            snippet.args.path === "game.Missing"
-              ? { error: "Not found at segment: Missing" }
-              : { snippet: snippet.name, args: snippet.args };
-          ws.send(JSON.stringify({ type: "result", id: message.id, ok: true, value: [value] }));
-        } else {
-          if (message.code.includes("emit log")) {
-            ws.send(JSON.stringify({ type: "log", level: "info", message: "log made by the code" }));
+        const answer = () => {
+          if (snippet) {
+            let value;
+            if (snippet.args.path === "game.Missing") {
+              value = { error: "Not found at segment: Missing" };
+            } else if (snippet.name === "get_hierarchy") {
+              value = { snippet: snippet.name, args: snippet.args, nodes: 2, tree: "Workspace [Folder]\n  Map [Model]" };
+            } else if (snippet.name === "get_script_source" && snippet.args.path === "game.WithSource") {
+              value = { snippet: snippet.name, path: "game.WithSource", source: 'print("hi")\nreturn 1' };
+            } else {
+              value = { snippet: snippet.name, args: snippet.args, executor: name };
+            }
+            ws.send(JSON.stringify({ type: "result", id: message.id, ok: true, value: [value] }));
+          } else {
+            if (message.code.includes("emit log")) {
+              ws.send(JSON.stringify({ type: "log", level: "info", message: `log made by ${name}` }));
+            }
+            ws.send(JSON.stringify({ type: "result", id: message.id, ok: true, value: [`ran: ${message.code}`, name] }));
           }
-          ws.send(JSON.stringify({ type: "result", id: message.id, ok: true, value: [`ran: ${message.code}`] }));
-        }
+        };
+        if (delayMs > 0) setTimeout(answer, delayMs);
+        else answer();
       } else if (message.type === "inspect") {
         ws.send(JSON.stringify({ type: "result", id: message.id, ok: false, error: `Not found at segment: ${message.path}` }));
       }
@@ -133,7 +150,9 @@ function connectExecutor(port, { answerPings = true, token } = {}) {
           type: "hello",
           token,
           placeId: 777,
-          jobId: "job",
+          jobId: `job-${userId}`,
+          userId,
+          userName: name,
           executor: "TestExec 1.0",
           clientVersion: "9.9.9",
         }),
@@ -162,6 +181,7 @@ async function main() {
     assert.strictEqual(res.result.serverInfo.name, "superbase");
     assert.strictEqual(res.result.serverInfo.title, "Superbase");
     assert.strictEqual(res.result.protocolVersion, "2025-06-18");
+    const instructions = res.result.instructions;
     assert.ok(res.result.instructions.includes("roblox_status"), "instructions must tell the AI to check the status");
     assert.ok(res.result.instructions.includes("loadstring"), "instructions must mention the loadstring script");
     mcp.notify("notifications/initialized");
@@ -178,20 +198,34 @@ async function main() {
       "find_instances",
       "get_errors",
       "get_game_info",
+      "get_hierarchy",
       "get_logs",
       "get_script_source",
+      "gui_interact",
       "inspect_instance",
+      "list_clients",
+      "list_scripts",
+      "remote_spy",
       "roblox_status",
+      "screenshot",
+      "search_scripts",
       "set_property",
       "wait_for_log",
     ]);
+    assert.strictEqual(res.result.tools.length, 18);
     for (const tool of res.result.tools) {
       assert.strictEqual(tool.inputSchema.type, "object");
       assert.strictEqual(tool.run, undefined, "implementation must not leak into tools/list");
       assert.strictEqual(tool.probe, undefined);
       assert.strictEqual(tool.needsRoblox, undefined);
       assert.strictEqual(tool.reportsConnection, undefined);
+      assert.ok(tool.description.length > 40, `${tool.name} needs a real description`);
     }
+    const withClient = res.result.tools.filter((tool) => tool.inputSchema.properties.client).map((tool) => tool.name);
+    for (const name of ["execute_lua", "get_game_info", "inspect_instance", "get_hierarchy", "find_instances", "list_scripts", "get_script_source", "search_scripts", "remote_spy", "gui_interact", "set_property", "roblox_status", "get_logs", "get_errors", "wait_for_log", "clear_logs"]) {
+      assert.ok(withClient.includes(name), `${name} must accept a client id`);
+    }
+    assert.ok(instructions.includes("list_clients") && instructions.includes("remote_spy"), "instructions describe the new tools");
 
     // State: bridge_offline (the bridge is not running yet).
     res = await mcp.call("roblox_status", {});
@@ -224,6 +258,11 @@ async function main() {
       ["find_instances", { name: "Part" }],
       ["get_script_source", { path: "game.Workspace.Script" }],
       ["set_property", { path: "game.Workspace.Part", property: "Transparency", value_json: "0.5" }],
+      ["get_hierarchy", {}],
+      ["list_scripts", {}],
+      ["search_scripts", { query: "coins" }],
+      ["remote_spy", { action: "status" }],
+      ["gui_interact", { action: "list" }],
     ]) {
       res = await mcp.call(name, args);
       assert.strictEqual(res.result.isError, true, `${name} needs a connected game`);
@@ -282,7 +321,7 @@ async function main() {
     assert.strictEqual(res.result.isError, false);
     let body = bodyOf(res);
     assert.ok(Array.isArray(body.logs), "capture_logs returns the logs");
-    assert.ok(body.logs.some((entry) => entry.message === "log made by the code"), "the log made during the run is captured");
+    assert.ok(body.logs.some((entry) => entry.message === "log made by Tester"), "the log made during the run is captured");
     assert.deepStrictEqual(body.errors, []);
 
     res = await mcp.call("execute_lua", { code: "return 1" });
@@ -391,6 +430,146 @@ async function main() {
     res = await mcp.call("clear_logs", {});
     assert.strictEqual(res.result.isError, false);
 
+    // New snippet tools: arguments are validated, clamped and passed through.
+    res = await mcp.call("get_hierarchy", { root: "game.Workspace", depth: 99, max_nodes: 5, class_name: "Part" });
+    let text = textOf(res);
+    assert.strictEqual(res.result.isError, false);
+    assert.ok(text.includes("```\nWorkspace [Folder]\n  Map [Model]\n```"), "the tree is shown as plain text, not an escaped JSON string");
+    const jsonPart = JSON.parse(text.split("\n\n").slice(1).join("\n\n").split("\n\n```")[0]);
+    assert.strictEqual(jsonPart.value.tree, undefined, "the tree is not duplicated inside the JSON");
+    assert.deepStrictEqual(jsonPart.value.args, { root: "game.Workspace", depth: 8, max_nodes: 10, max_children: 40, class_name: "Part" });
+
+    res = await mcp.call("get_script_source", { path: "game.WithSource" });
+    text = textOf(res);
+    assert.ok(text.includes('```lua\nprint("hi")\nreturn 1\n```'), "script source is shown as a code block");
+
+    res = await mcp.call("find_instances", { selector: "Model > Part[Anchored=false]", properties: ["Position", "Size"], limit: 5 });
+    body = bodyOf(res).value;
+    assert.strictEqual(body.args.limit, 5);
+    assert.deepStrictEqual(body.args.properties, ["Position", "Size"]);
+    assert.deepStrictEqual(body.args.steps, [
+      { combinator: "descendant", type: "Model", name: null, attrs: [] },
+      { combinator: "child", type: "Part", name: null, attrs: [{ prop: "Anchored", op: "=", value: false }] },
+    ]);
+
+    res = await mcp.call("find_instances", { selector: "Model >" });
+    assert.strictEqual(res.result.isError, true);
+    assert.ok(textOf(res).includes("Invalid selector"), "a bad selector explains itself");
+
+    res = await mcp.call("list_scripts", { class_name: "ModuleScript", include_hidden: true, limit: 99999 });
+    body = bodyOf(res).value;
+    assert.strictEqual(body.snippet, "list_scripts");
+    assert.deepStrictEqual(body.args, { class_name: "ModuleScript", include_hidden: true, limit: 500 });
+
+    res = await mcp.call("search_scripts", { query: "coins", mode: "words", context_lines: 9, budget_seconds: 600 });
+    body = bodyOf(res).value;
+    assert.strictEqual(body.snippet, "search_scripts");
+    assert.strictEqual(body.args.budget_seconds, 60, "the search budget is clamped");
+    assert.strictEqual(body.args.context_lines, 3);
+    assert.strictEqual(body.args.mode, "words");
+    assert.strictEqual(body.args.max_matches, 40);
+    res = await mcp.call("search_scripts", { query: "" });
+    assert.strictEqual(res.result.isError, true);
+
+    res = await mcp.call("remote_spy", { action: "start", ignore: ["Heartbeat", 7], only: "buy", max_calls: 99999, include_own: true });
+    body = bodyOf(res).value;
+    assert.strictEqual(body.snippet, "remote_spy");
+    assert.deepStrictEqual(body.args, { action: "start", only: "buy", ignore: ["Heartbeat", "7"], max_calls: 2000, include_own: true });
+    res = await mcp.call("remote_spy", { action: "get", since_id: 12, limit: 5 });
+    assert.strictEqual(bodyOf(res).value.args.since_id, 12);
+    res = await mcp.call("remote_spy", { action: "explode" });
+    assert.strictEqual(res.result.isError, true);
+
+    res = await mcp.call("gui_interact", { action: "click", path: "Players.Me.PlayerGui.Main.Play", mode: "mouse" });
+    body = bodyOf(res).value;
+    assert.strictEqual(body.snippet, "gui_interact");
+    assert.strictEqual(body.args.mode, "mouse");
+    res = await mcp.call("gui_interact", { action: "click" });
+    assert.strictEqual(res.result.isError, true, "click needs a path");
+    res = await mcp.call("gui_interact", { action: "set_text", path: "game.A.Box" });
+    assert.strictEqual(res.result.isError, true, "set_text needs text");
+    res = await mcp.call("gui_interact", { action: "list", limit: 9999 });
+    assert.strictEqual(bodyOf(res).value.args.limit, 200);
+
+    // Screenshots need Windows, so the Linux test machine gets a clear error from the bridge.
+    res = await mcp.call("screenshot", {});
+    assert.strictEqual(res.result.isError, true);
+    assert.ok(textOf(res).includes("only supported on Windows"));
+
+    // Several Roblox windows at once.
+    const second = await connectExecutor(PORT, { name: "Second", userId: 2 });
+    await sleep(150);
+
+    res = await mcp.call("roblox_status", {});
+    assert.ok(textOf(res).split("\n")[0].includes("2 clients connected"), "the status line shows the client count");
+    status = bodyOf(res);
+    assert.strictEqual(status.clientCount, 2);
+    assert.strictEqual(status.clients.length, 2);
+
+    res = await mcp.call("list_clients", {});
+    body = bodyOf(res);
+    assert.strictEqual(res.result.isError, false);
+    assert.deepStrictEqual(body.clients.map((client) => client.userName), ["Tester", "Second"]);
+    const secondId = body.clients[1].id;
+    const firstId = body.clients[0].id;
+    assert.strictEqual(body.clients[1].isDefault, true, "the newest client is the default");
+    assert.strictEqual(body.clients[0].isDefault, false);
+
+    res = await mcp.call("execute_lua", { code: "return 1" });
+    assert.deepStrictEqual(bodyOf(res).value, ["ran: return 1", "Second"], "no client id means the newest client");
+    res = await mcp.call("execute_lua", { code: "return 1", client: firstId });
+    assert.deepStrictEqual(bodyOf(res).value, ["ran: return 1", "Tester"], "a client id routes the command");
+    assert.ok(textOf(res).split("\n")[0].includes(`${firstId} (Tester)`), "the status line names the selected client");
+    res = await mcp.call("get_game_info", { client: firstId });
+    assert.strictEqual(bodyOf(res).value.executor, "Tester");
+    res = await mcp.call("find_instances", { name: "x", client: secondId });
+    assert.strictEqual(bodyOf(res).value.executor, "Second");
+
+    res = await mcp.call("execute_lua", { code: "return 1", client: "c99" });
+    assert.strictEqual(res.result.isError, true);
+    assert.ok(textOf(res).includes("unknown_client"));
+    assert.ok(textOf(res).includes(`${firstId} (Tester)`) && textOf(res).includes(`${secondId} (Second)`), "the hint lists the connected clients");
+    assert.ok(textOf(res).includes("execute_lua was not run"));
+    res = await mcp.call("roblox_status", { client: "c99" });
+    assert.ok(textOf(res).startsWith("[Superbase] ○ unknown_client"));
+    assert.strictEqual(bodyOf(res).ready, false);
+
+    // Logs carry the client id, and capture_logs only reports the client that ran the code.
+    res = await mcp.call("execute_lua", { code: "print('emit log')", capture_logs: true, wait_ms: 200, client: firstId });
+    body = bodyOf(res);
+    assert.deepStrictEqual(body.logs.map((entry) => entry.message), ["log made by Tester"]);
+    assert.strictEqual(body.logs[0].client, firstId);
+    res = await mcp.call("execute_lua", { code: "print('emit log')", capture_logs: true, wait_ms: 200, client: secondId });
+    assert.deepStrictEqual(bodyOf(res).logs.map((entry) => entry.message), ["log made by Second"]);
+
+    res = await mcp.call("get_logs", { contains: "log made by", client: secondId });
+    assert.deepStrictEqual(bodyOf(res).logs.map((entry) => entry.client), [secondId]);
+    res = await mcp.call("get_logs", { contains: "log made by" });
+    assert.deepStrictEqual(bodyOf(res).logs.map((entry) => entry.client).sort(), [firstId, secondId].sort(), "without a client id the logs of all clients are returned");
+
+    res = await mcp.call("clear_logs", { client: secondId });
+    assert.strictEqual(bodyOf(res).client, secondId);
+    res = await mcp.call("get_logs", { contains: "log made by" });
+    assert.ok(bodyOf(res).logs.every((entry) => entry.client !== secondId), "only the chosen client's entries were cleared");
+    assert.deepStrictEqual(bodyOf(res).logs.map((entry) => entry.client), [firstId]);
+
+    // A slow command can be given more time, and a short timeout fails fast.
+    const slow = await connectExecutor(PORT, { name: "Slow", userId: 3, delayMs: 1800 });
+    await sleep(100);
+    res = await mcp.call("execute_lua", { code: "return 1", timeout_ms: 1000 });
+    assert.strictEqual(res.result.isError, true);
+    assert.ok(textOf(res).includes("Timed out after 1 seconds"), textOf(res));
+    res = await mcp.call("execute_lua", { code: "return 2", timeout_ms: 5000 });
+    assert.strictEqual(res.result.isError, false);
+    assert.deepStrictEqual(bodyOf(res).value, ["ran: return 2", "Slow"]);
+    slow.close();
+    second.close();
+    await sleep(300);
+
+    res = await mcp.call("roblox_status", {});
+    assert.strictEqual(bodyOf(res).clientCount, 1, "the other windows left");
+    assert.strictEqual(bodyOf(res).selectedClient, firstId);
+
     // The executor disconnects: back to waiting_for_roblox, with the loader again.
     ws.close();
     await sleep(200);
@@ -409,6 +588,34 @@ async function main() {
     assert.ok(textOf(res).startsWith("[Superbase] ○ unresponsive"));
     assert.strictEqual(bodyOf(res).ready, false);
     silent.terminate();
+
+    // Image results: a stub bridge answers the screenshot request like the real one does on Windows.
+    const seen = [];
+    const stub = http.createServer((req, res2) => {
+      seen.push(req.url);
+      res2.setHeader("content-type", "application/json");
+      if (req.url.startsWith("/status")) {
+        res2.end(JSON.stringify({ connected: false, state: "waiting_for_roblox", clients: [], clientCount: 0, logCount: 0, errorCount: 0 }));
+      } else if (req.url.startsWith("/screenshot")) {
+        res2.end(JSON.stringify({ ok: true, mimeType: "image/jpeg", data: "QUJD", width: 640, height: 360, title: "Roblox" }));
+      } else {
+        res2.statusCode = 404;
+        res2.end(JSON.stringify({ error: "Not found" }));
+      }
+    });
+    await new Promise((resolve) => stub.listen(STUB_PORT, "127.0.0.1", resolve));
+    const stubbed = startMcp(STUB_PORT);
+    children.push(stubbed.child);
+    res = await stubbed.call("screenshot", { max_width: 640, focus: true });
+    assert.strictEqual(res.result.isError, false);
+    assert.strictEqual(res.result.content.length, 2);
+    assert.strictEqual(res.result.content[0].type, "text");
+    assert.ok(res.result.content[0].text.includes("640") && !res.result.content[0].text.includes("QUJD"), "the text part has the size but not the image data");
+    assert.deepStrictEqual(res.result.content[1], { type: "image", data: "QUJD", mimeType: "image/jpeg" });
+    assert.ok(seen.some((url) => url === "/screenshot?max_width=640&focus=1"), seen.join(" "));
+    res = await stubbed.call("screenshot", { max_width: 99999 });
+    assert.ok(seen.some((url) => url === "/screenshot?max_width=1920"), "the width is clamped");
+    stub.close();
 
     // Token mode: the bridge is protected, so the MCP config must carry the same token.
     children.push(await startBridge(TOKEN_PORT, TOKEN));
