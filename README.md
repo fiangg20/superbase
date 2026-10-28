@@ -8,6 +8,10 @@
   <strong>Let an AI assistant debug your live Roblox game.</strong>
 </p>
 
+<p align="center">
+[![Verified by M8ven](https://m8ven.ai/badge/mcp/fiangg20-superbase-1nmxtn)](https://m8ven.ai/verified?check=https%3A%2F%2Fgithub.com%2Ffiangg20%2Fsuperbase)
+</p>
+
 Superbase is a local [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that connects AI assistants to running Roblox sessions through your executor. The AI can read the console and script errors, explore the instance tree with CSS-like selectors, read and search script sources, spy on remote calls, operate the GUI, take screenshots, change properties and run Lua. It always knows whether Roblox is actually connected, and you can watch everything in a local web dashboard.
 
 - **Zero configuration.** No token, no account, no copy and paste. Start the bridge, run one line in your executor, add the MCP server to your AI client.
@@ -44,6 +48,7 @@ Superbase is a local [Model Context Protocol](https://modelcontextprotocol.io) (
 - [Troubleshooting](#troubleshooting)
 - [FAQ](#faq)
 - [License](#license)
+- [Credits](#credits)
 
 ## How it works
 
@@ -816,6 +821,9 @@ No. Superbase is an independent project.
 
 Superbase is released under the [MIT License](LICENSE). You may use, copy, modify and distribute it, including in commercial projects, as long as the copyright notice and the license text stay with it. The software comes without any warranty. You are responsible for where and how you use it, see [Security](#security).
 
-Superbase is an independent project and is not affiliated with Roblox.
+## Credits
 
-[![M8ven Verified](https://m8ven.ai/api/agent-verify/badge?score=100)](https://m8ven.ai/verified/verify?id=0bb49c4198ee7e63)
+- Built by [Bases](https://github.com/fiangg20) ([@fyandevelopers](https://www.roblox.com/users/5349151666/profile))
+- MCP implementation inspired by the [Model Context Protocol](https://modelcontextprotocol.io)
+
+Superbase is an independent project and is not affiliated with Roblox.
