@@ -751,6 +751,8 @@ superbase/
 │   ├── lua.test.js
 │   ├── lua-runtime.test.js
 │   └── lua/                Mock of the Roblox API for the snippet tests
+├── LICENSE
+├── package-lock.json
 ├── package.json
 └── README.md
 ```
