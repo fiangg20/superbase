@@ -42,8 +42,21 @@ const CLIENT_SCRIPT_CANDIDATES = [
   path.join(__dirname, "..", "roblox", "client.lua"),
   path.join(__dirname, "client.lua"),
 ];
-const DASHBOARD_FILE = path.join(__dirname, "dashboard.html");
+const DASHBOARD_DIR = path.join(__dirname, "dashboard");
+const FONT_DIR = path.join(__dirname, "..", "assets", "fonts");
 const ICON_FILE = path.join(__dirname, "..", "assets", "icon.png");
+
+// Everything the dashboard loads, by exact URL. Nothing else is ever read from disk for a web request,
+// so there is no way to ask for another file with ../ or an encoded path.
+const DASHBOARD_FILES = new Map([
+  ["/", { file: path.join(DASHBOARD_DIR, "index.html"), type: "text/html; charset=utf-8", page: true }],
+  ["/dashboard.css", { file: path.join(DASHBOARD_DIR, "dashboard.css"), type: "text/css; charset=utf-8" }],
+  ["/dashboard.js", { file: path.join(DASHBOARD_DIR, "dashboard.js"), type: "text/javascript; charset=utf-8" }],
+  ["/theme-init.js", { file: path.join(DASHBOARD_DIR, "theme-init.js"), type: "text/javascript; charset=utf-8" }],
+  ["/fonts/BuilderSans-Regular-400.otf", { file: path.join(FONT_DIR, "BuilderSans-Regular-400.otf"), type: "font/otf", cache: "max-age=3600" }],
+  ["/fonts/BuilderIcons-Regular.ttf", { file: path.join(FONT_DIR, "BuilderIcons-Regular.ttf"), type: "font/ttf", cache: "max-age=3600" }],
+  ["/fonts/BuilderIcons-Filled.ttf", { file: path.join(FONT_DIR, "BuilderIcons-Filled.ttf"), type: "font/ttf", cache: "max-age=3600" }],
+]);
 
 if (!OPEN_MODE && (TOKEN === "PASTE_YOUR_TOKEN_HERE" || TOKEN.length < 16)) {
   console.error("BRIDGE_TOKEN must be at least 16 characters. Unset it to use open mode, or generate one with:");
@@ -337,26 +350,33 @@ function sendText(res, status, text) {
 }
 
 // The dashboard may only be shown as a top level page and only talks to this bridge.
-function sendDashboard(res) {
-  let html;
+// Styles, scripts and fonts all come from the bridge itself, so the policy needs no 'unsafe-inline'.
+const DASHBOARD_CSP =
+  "default-src 'none'; style-src 'self'; script-src 'self'; font-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+
+function sendDashboardFile(res, entry) {
+  let body;
   try {
-    html = fs.readFileSync(DASHBOARD_FILE);
+    body = fs.readFileSync(entry.file);
   } catch {
-    sendJson(res, 404, { error: "The dashboard file src/dashboard.html was not found" });
+    // A missing font only costs looks: the page falls back to system fonts and hides its icons.
+    sendJson(res, 404, { error: `${path.relative(path.join(__dirname, ".."), entry.file).split(path.sep).join("/")} was not found` });
     return;
   }
 
-  res.writeHead(200, {
-    "Content-Type": "text/html; charset=utf-8",
-    "Content-Length": html.length,
-    "Cache-Control": "no-store",
-    "Content-Security-Policy":
-      "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
-    "X-Frame-Options": "DENY",
+  const headers = {
+    "Content-Type": entry.type,
+    "Content-Length": body.length,
+    "Cache-Control": entry.cache || "no-store",
     "X-Content-Type-Options": "nosniff",
-    "Referrer-Policy": "no-referrer",
-  });
-  res.end(html);
+  };
+  if (entry.page) {
+    headers["Content-Security-Policy"] = DASHBOARD_CSP;
+    headers["X-Frame-Options"] = "DENY";
+    headers["Referrer-Policy"] = "no-referrer";
+  }
+  res.writeHead(200, headers);
+  res.end(body);
 }
 
 function readJsonBody(req) {
@@ -433,9 +453,9 @@ const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${HOST}:${PORT}`);
     const route = `${req.method} ${url.pathname}`;
 
-    // The dashboard page itself holds no data, it loads everything through the API below.
-    if (route === "GET /") {
-      sendDashboard(res);
+    // The dashboard page, its styles, script and fonts hold no data. The page loads everything through the API below.
+    if (req.method === "GET" && DASHBOARD_FILES.has(url.pathname)) {
+      sendDashboardFile(res, DASHBOARD_FILES.get(url.pathname));
       return;
     }
 

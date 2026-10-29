@@ -51,6 +51,7 @@ local LogService = game:GetService("LogService")
 local ScriptContext = game:GetService("ScriptContext")
 local TweenService = game:GetService("TweenService")
 local ContentProvider = game:GetService("ContentProvider")
+local TextService = game:GetService("TextService")
 local RunService = game:GetService("RunService")
 local Lighting = game:GetService("Lighting")
 local CoreGui = game:GetService("CoreGui")
@@ -148,6 +149,75 @@ local TOAST_COLORS = {
     error = Color3.fromRGB(231, 76, 60),
 }
 
+-- Fonts. Text uses Builder Sans. Icons use the Builder Icons font that ships with Roblox: it is a
+-- ligature font, so the icon name written as text becomes the glyph (Text = "circle-check").
+-- Regular weight is the outlined icon and Bold weight is the filled icon.
+local ICON_FONT_URL = "rbxasset://LuaPackages/Packages/_Index/BuilderIcons/BuilderIcons/BuilderIcons.json"
+local TOAST_ICONS = {
+    info = "circle-i",
+    success = "circle-check",
+    warning = "triangle-exclamation",
+    error = "circle-x",
+}
+local TOAST_ICON_FILLED = true
+local ICON_SIZE = 18
+
+-- Builder Sans may be missing in an older Roblox version, so the font is set with a fallback.
+local function setTextFont(label, fallback)
+    local ok = pcall(function()
+        label.Font = Enum.Font.BuilderSans
+    end)
+    if not ok then
+        label.Font = fallback
+    end
+end
+
+-- The icon font is checked once. A glyph is about one em wide, the plain name is several times wider.
+local iconFontReady = nil
+
+local function iconFontAvailable()
+    if iconFontReady ~= nil then
+        return iconFontReady
+    end
+
+    local ok, bounds = pcall(function()
+        local params = Instance.new("GetTextBoundsParams")
+        params.Text = "circle-check"
+        params.Font = Font.new(ICON_FONT_URL, Enum.FontWeight.Regular)
+        params.Size = ICON_SIZE
+        params.Width = 10000
+        return TextService:GetTextBoundsAsync(params)
+    end)
+    iconFontReady = ok and bounds.X > 0 and bounds.X < ICON_SIZE * 2
+    return iconFontReady
+end
+
+-- Returns a label that shows the icon, or a plain dot when the icon font is not available.
+local function makeIcon(name, color, filled)
+    local label = Instance.new("TextLabel")
+    label.Name = "Icon"
+    label.BackgroundTransparency = 1
+    label.Size = UDim2.fromOffset(ICON_SIZE, ICON_SIZE)
+    label.TextSize = ICON_SIZE
+    label.TextColor3 = color
+    label.TextXAlignment = Enum.TextXAlignment.Center
+    label.TextYAlignment = Enum.TextYAlignment.Center
+
+    local shown = false
+    if iconFontAvailable() then
+        shown = pcall(function()
+            label.FontFace = Font.new(ICON_FONT_URL, filled and Enum.FontWeight.Bold or Enum.FontWeight.Regular)
+            label.Text = name
+        end)
+    end
+    if not shown then
+        label.Font = Enum.Font.GothamBold
+        label.Text = "●"
+        label.TextSize = 12
+    end
+    return label
+end
+
 local toastGui = nil
 local toastList = nil
 local toasts = {}
@@ -215,8 +285,10 @@ local function dismissToast(entry)
     end)
 end
 
-local function showToast(kind, title, text, key)
+local function showToast(kind, title, text, key, iconName)
     local ok, err = pcall(function()
+        -- Checked first, because it can wait for the font to load and the rest should not interleave with other toasts.
+        iconFontAvailable()
         ensureToastGui()
 
         -- A toast with the same key replaces the previous one instead of stacking.
@@ -255,38 +327,54 @@ local function showToast(kind, title, text, key)
         padding.PaddingRight = UDim.new(0, 14)
         padding.Parent = frame
 
+        -- The icon sits on the left. The title and the text stack to its right.
+        local icon = makeIcon(iconName or TOAST_ICONS[kind] or TOAST_ICONS.info, color, TOAST_ICON_FILLED)
+        icon.Parent = frame
+
+        local body = Instance.new("Frame")
+        body.Name = "Body"
+        body.BackgroundTransparency = 1
+        body.Size = UDim2.new(1, 0, 0, 0)
+        body.AutomaticSize = Enum.AutomaticSize.Y
+        body.Parent = frame
+
+        local bodyPadding = Instance.new("UIPadding")
+        bodyPadding.PaddingLeft = UDim.new(0, ICON_SIZE + 10)
+        bodyPadding.Parent = body
+
         local layout = Instance.new("UIListLayout")
         layout.Padding = UDim.new(0, 2)
         layout.SortOrder = Enum.SortOrder.LayoutOrder
-        layout.Parent = frame
+        layout.Parent = body
 
         local titleLabel = Instance.new("TextLabel")
+        titleLabel.Name = "Title"
         titleLabel.LayoutOrder = 1
         titleLabel.BackgroundTransparency = 1
         titleLabel.Size = UDim2.new(1, 0, 0, 0)
         titleLabel.AutomaticSize = Enum.AutomaticSize.Y
-        titleLabel.Font = Enum.Font.GothamBold
-        titleLabel.TextSize = 14
+        setTextFont(titleLabel, Enum.Font.GothamBold)
+        titleLabel.TextSize = 15
         titleLabel.TextXAlignment = Enum.TextXAlignment.Left
         titleLabel.TextWrapped = true
-        titleLabel.RichText = true
         titleLabel.TextColor3 = Color3.new(1, 1, 1)
-        titleLabel.Text = string.format('<font color="#%s">●</font>  %s', toHex(color), title)
-        titleLabel.Parent = frame
+        titleLabel.Text = title
+        titleLabel.Parent = body
 
         if text and text ~= "" then
             local textLabel = Instance.new("TextLabel")
+            textLabel.Name = "Text"
             textLabel.LayoutOrder = 2
             textLabel.BackgroundTransparency = 1
             textLabel.Size = UDim2.new(1, 0, 0, 0)
             textLabel.AutomaticSize = Enum.AutomaticSize.Y
-            textLabel.Font = Enum.Font.GothamMedium
-            textLabel.TextSize = 12
+            setTextFont(textLabel, Enum.Font.GothamMedium)
+            textLabel.TextSize = 13
             textLabel.TextXAlignment = Enum.TextXAlignment.Left
             textLabel.TextWrapped = true
             textLabel.TextColor3 = Color3.fromRGB(170, 176, 190)
             textLabel.Text = text
-            textLabel.Parent = frame
+            textLabel.Parent = body
         end
 
         local entry = { frame = frame, key = key, dismissed = false }
@@ -302,7 +390,7 @@ local function showToast(kind, title, text, key)
 end
 
 -- Toasts wait for the intro to finish, because the intro covers the whole screen.
-local function notify(kind, title, text, key)
+local function notify(kind, title, text, key, iconName)
     if not CONFIG.Notifications then
         return
     end
@@ -312,14 +400,14 @@ local function notify(kind, title, text, key)
             task.wait(0.2)
         end
         if running then
-            showToast(kind, title, text, key)
+            showToast(kind, title, text, key, iconName)
         end
     end)
 end
 
 local lastActivityToast = 0
 
-local function notifyActivity(text)
+local function notifyActivity(text, iconName)
     if not CONFIG.NotifyActivity or introActive then
         return
     end
@@ -329,7 +417,7 @@ local function notifyActivity(text)
         return
     end
     lastActivityToast = now
-    notify("info", "AI activity", text, "activity")
+    notify("info", "AI activity", text, "activity", iconName)
 end
 
 -- ---------------------------------------------------------------------------
@@ -463,7 +551,7 @@ local function playIntro()
     percent.Position = UDim2.new(0.5, 0, 0.5, S / 2 + 48)
     percent.Size = UDim2.fromOffset(120, 14)
     percent.BackgroundTransparency = 1
-    percent.Font = Enum.Font.GothamMedium
+    setTextFont(percent, Enum.Font.GothamMedium)
     percent.TextSize = 11
     percent.TextColor3 = Color3.new(1, 1, 1)
     percent.TextTransparency = 1
@@ -932,7 +1020,7 @@ local function handleMessage(raw)
         print("[Superbase] Connected and authenticated")
 
         if linkState == "offline" then
-            notify("success", "Reconnected", "The AI can see this game again.", "link")
+            notify("success", "Reconnected", "The AI can see this game again.", "link", "arrow-rotate-right")
         else
             notify("success", "Connected", "The AI can now see and debug this game.", "link")
         end
@@ -950,12 +1038,12 @@ local function handleMessage(raw)
     if message.type == "ping" then
         send({ type = "pong", id = message.id })
     elseif message.type == "exec" then
-        notifyActivity("Running Lua code in this game.")
+        notifyActivity("Running Lua code in this game.", "code")
         local ok, result = runCode(tostring(message.code or ""))
         reply(message.id, ok, result)
     elseif message.type == "inspect" then
         local path = tostring(message.path or "game")
-        notifyActivity("Inspecting " .. truncate(path, 60))
+        notifyActivity("Inspecting " .. truncate(path, 60), "magnifying-glass")
         local ok, result = inspectInstance(path, message.properties)
         reply(message.id, ok, result)
     end
@@ -1038,7 +1126,7 @@ local function connectLoop()
 
             if running and authenticated then
                 linkState = "offline"
-                notify("warning", "Disconnected", "Lost the connection to the bridge. Reconnecting...", "link")
+                notify("warning", "Disconnected", "Lost the connection to the bridge. Reconnecting...", "link", "wifi-signal-poor")
             elseif running then
                 warn("[Superbase] Connection closed before authentication. If the bridge was started with BRIDGE_TOKEN, set CONFIG.Token to the same value.")
                 if not rejectNotified then
@@ -1071,7 +1159,8 @@ local function connectLoop()
                     "warning",
                     "Bridge not found",
                     "Start it with npm start. This script keeps retrying every " .. CONFIG.ReconnectDelay .. " seconds.",
-                    "link"
+                    "link",
+                    "wifi-signal-poor"
                 )
             end
         end

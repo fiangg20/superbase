@@ -269,7 +269,40 @@ async function testMultiClient(BASE) {
   assert.ok(res.headers.get("content-security-policy").includes("frame-ancestors 'none'"));
   assert.strictEqual(res.headers.get("x-frame-options"), "DENY");
   assert.strictEqual(res.headers.get("x-content-type-options"), "nosniff");
-  assert.ok((await res.text()).includes("Superbase"));
+  const csp = res.headers.get("content-security-policy");
+  assert.ok(/style-src 'self'(;|$)/.test(csp) && /script-src 'self'(;|$)/.test(csp) && /font-src 'self'(;|$)/.test(csp), "styles, scripts and fonts come from the bridge");
+  assert.ok(!csp.includes("unsafe-inline") && !csp.includes("unsafe-eval"), "the policy has no unsafe sources");
+  const page = await res.text();
+  assert.ok(page.includes("Superbase"));
+  assert.ok(!/<style|<script(?![^>]*\bsrc=)|\sstyle=|\sonclick=/i.test(page), "the page has no inline style, script or handler");
+
+  // The stylesheet, the scripts and the fonts are served with the right types and nothing else is.
+  for (const [asset, type, needle] of [
+    ["/dashboard.css", "text/css", "Builder Sans"],
+    ["/dashboard.js", "text/javascript", "superbase-theme"],
+    ["/theme-init.js", "text/javascript", "data-theme"],
+  ]) {
+    const response = await fetch(`${BASE}${asset}`);
+    assert.strictEqual(response.status, 200, asset);
+    assert.ok(response.headers.get("content-type").startsWith(type), `${asset} content type`);
+    assert.strictEqual(response.headers.get("x-content-type-options"), "nosniff");
+    assert.ok((await response.text()).includes(needle), `${asset} content`);
+  }
+  for (const [font, type] of [
+    ["BuilderSans-Regular-400.otf", "font/otf"],
+    ["BuilderIcons-Regular.ttf", "font/ttf"],
+    ["BuilderIcons-Filled.ttf", "font/ttf"],
+  ]) {
+    const response = await fetch(`${BASE}/fonts/${font}`);
+    assert.strictEqual(response.status, 200, font);
+    assert.strictEqual(response.headers.get("content-type"), type);
+    assert.ok((await response.arrayBuffer()).byteLength > 10000, `${font} is the real font file`);
+  }
+  for (const bad of ["/fonts/", "/fonts/missing.ttf", "/fonts/../package.json", "/fonts/%2e%2e/package.json", "/dashboard.html", "/src/bridge.js", "/dashboard.css/../bridge.js"]) {
+    const response = await rawRequest(MULTI_PORT, { requestPath: bad });
+    assert.ok(response.status === 401 || response.status === 404, `${bad} is not a file the bridge hands out (got ${response.status})`);
+  }
+  assert.strictEqual((await rawRequest(MULTI_PORT, { requestPath: "/dashboard.css", headers: { Origin: "https://evil.example" } })).status, 403, "assets are not served to foreign origins");
   assert.strictEqual((await rawRequest(MULTI_PORT, { requestPath: "/", headers: { Origin: "https://evil.example" } })).status, 403, "the page is not served to foreign origins");
   assert.strictEqual((await rawRequest(MULTI_PORT, { requestPath: "/", headers: { Host: "evil.example" } })).status, 403, "the page is not served for foreign hosts");
   res = await fetch(`${BASE}/icon.png`);

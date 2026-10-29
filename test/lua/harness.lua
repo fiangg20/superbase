@@ -80,7 +80,11 @@ function methods.GetService(self, name)
     return extraServices[name]
 end
 function methods.GetGuiInset(self) return { X = 0, Y = 36 } end
-function methods.CaptureFocus(self) rawset(self, "_focused", true) end
+-- Like Roblox: capturing focus clears the text when ClearTextOnFocus is on.
+function methods.CaptureFocus(self)
+    rawset(self, "_focused", true)
+    if rawget(self, "ClearTextOnFocus") ~= false then rawset(self, "Text", "") end
+end
 function methods.ReleaseFocus(self, submit) rawset(self, "_focused", false); rawset(self, "_submitted", submit) end
 
 Inst.__index = function(self, key)
@@ -130,7 +134,7 @@ local menu = new("Frame", "Menu", { Visible = true, AbsolutePosition = { X = 0, 
 local play = new("TextButton", "Play", { Text = "Play", Visible = true, AbsolutePosition = { X = 10, Y = 20 }, AbsoluteSize = { X = 100, Y = 40 } }, menu)
 local hiddenFrame = new("Frame", "Shop", { Visible = false, AbsolutePosition = { X = 0, Y = 0 }, AbsoluteSize = { X = 1, Y = 1 } }, main)
 new("TextButton", "Buy", { Text = "Buy sword", Visible = true, AbsolutePosition = { X = 0, Y = 0 }, AbsoluteSize = { X = 1, Y = 1 } }, hiddenFrame)
-local box = new("TextBox", "NameBox", { Text = "", Visible = true, AbsolutePosition = { X = 5, Y = 70 }, AbsoluteSize = { X = 100, Y = 30 } }, menu)
+local box = new("TextBox", "NameBox", { Text = "", ClearTextOnFocus = true, Visible = true, AbsolutePosition = { X = 5, Y = 70 }, AbsoluteSize = { X = 100, Y = 30 } }, menu)
 local guiService = new("GuiService", "GuiService", {}, game)
 
 -- Globals ---------------------------------------------------------------

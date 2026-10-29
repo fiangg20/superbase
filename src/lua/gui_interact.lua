@@ -268,6 +268,16 @@ elseif action == "set_text" then
 
     local submitted = false
     if args.submit == true then
+        -- CaptureFocus clears the text when ClearTextOnFocus is on, which would submit an empty box.
+        local okClear, keepClear = pcall(function()
+            return instance.ClearTextOnFocus
+        end)
+        if okClear and keepClear ~= false then
+            pcall(function()
+                instance.ClearTextOnFocus = false
+            end)
+        end
+
         local focused = pcall(function()
             instance:CaptureFocus()
         end)
@@ -276,6 +286,12 @@ elseif action == "set_text" then
             instance:ReleaseFocus(true)
         end)
         submitted = focused and released
+
+        if okClear then
+            pcall(function()
+                instance.ClearTextOnFocus = keepClear
+            end)
+        end
 
         if not submitted and type(firesignal) == "function" then
             submitted = pcall(firesignal, instance.FocusLost, true, nil)

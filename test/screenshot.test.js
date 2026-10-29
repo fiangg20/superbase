@@ -48,6 +48,11 @@ async function main() {
   assert.deepStrictEqual(seen.env, { SB_MAX_WIDTH: "1920", SB_FOCUS: "1" });
   assert.strictEqual(typeof seen.timeoutMs, "number");
 
+  // Timings from the script are passed along when present.
+  const timed = await captureRobloxWindow({ platform: "win32", run: async () => ({ stdout: JSON.stringify({ ok: true, mimeType: "image/jpeg", width: 2, height: 2, title: "Roblox", data: "QQ==", native: "reflection", timings: { native: 40, find: 90, capture: 300, scale: 340, encode: 420 } }), stderr: "" }) });
+  assert.deepStrictEqual(timed.timings, { native: 40, find: 90, capture: 300, scale: 340, encode: 420 });
+  assert.strictEqual(timed.native, "reflection");
+
   const plain = await captureRobloxWindow({ platform: "win32", run: async (script, env) => ({ stdout: JSON.stringify({ ok: true, mimeType: "image/jpeg", width: 1, height: 1, data: "QQ==", env }), stderr: "" }) });
   assert.strictEqual(plain.title, null, "a missing title becomes null");
   assert.deepStrictEqual(seen.env, { SB_MAX_WIDTH: "1920", SB_FOCUS: "1" });
@@ -71,6 +76,9 @@ async function main() {
     assert.ok(POWERSHELL_SCRIPT.includes(needle), `the script must mention ${needle}`);
   }
   assert.strictEqual((POWERSHELL_SCRIPT.match(/\{/g) || []).length, (POWERSHELL_SCRIPT.match(/\}/g) || []).length, "braces in the script are balanced");
+  assert.strictEqual((POWERSHELL_SCRIPT.match(/\(/g) || []).length, (POWERSHELL_SCRIPT.match(/\)/g) || []).length, "parentheses in the script are balanced");
+  assert.ok(POWERSHELL_SCRIPT.includes("DefineDynamicAssembly") && POWERSHELL_SCRIPT.includes("New-NativeTypeCompiled"), "the script avoids the C# compiler and keeps it as a fallback");
+  assert.ok(!/\$\{/.test(POWERSHELL_SCRIPT), "no template placeholders are left in the script");
 
   console.log("ALL SCREENSHOT CHECKS PASSED");
 }

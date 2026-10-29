@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Superbase Dashboard</title>
+<link rel="icon" href="/icon.png">
+<link rel="preload" href="/fonts/BuilderSans-Regular-400.otf" as="font" type="font/otf" crossorigin>
+<link rel="preload" href="/fonts/BuilderIcons-Regular.ttf" as="font" type="font/ttf" crossorigin>
+<script src="/theme-init.js"></script>
+<link rel="stylesheet" href="/dashboard.css">
+<script src="/dashboard.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<div class="app">
+  <aside class="rail">
+    <a class="brand" href="/"><img id="logo" src="/icon.png" alt="" width="28" height="28"><span>Superbase</span></a>
+
+    <div class="tabs" role="tablist" aria-label="Tools" aria-orientation="vertical">
+      <button class="tab" role="tab" id="tab-logs" aria-controls="panel-logs" aria-selected="true"><span class="i" aria-hidden="true">rectangle-list</span><span class="tab-label">Logs</span><span id="count-logs" class="count">0</span></button>
+      <button class="tab" role="tab" id="tab-errors" aria-controls="panel-errors" aria-selected="false" tabindex="-1"><span class="i" aria-hidden="true">triangle-exclamation</span><span class="tab-label">Errors</span><span id="count-errors" class="count">0</span></button>
+      <button class="tab" role="tab" id="tab-console" aria-controls="panel-console" aria-selected="false" tabindex="-1"><span class="i" aria-hidden="true">code</span><span class="tab-label">Run Lua</span></button>
+      <button class="tab" role="tab" id="tab-explorer" aria-controls="panel-explorer" aria-selected="false" tabindex="-1"><span class="i" aria-hidden="true">three-box-flowchart</span><span class="tab-label">Explorer</span></button>
+      <button class="tab" role="tab" id="tab-screenshot" aria-controls="panel-screenshot" aria-selected="false" tabindex="-1"><span class="i" aria-hidden="true">photo-camera</span><span class="tab-label">Screenshot</span></button>
+    </div>
+
+    <div class="rail-foot">
+      <div id="bridge-info" class="bridge" data-state="connecting" role="status">
+        <span class="name"><span class="dot" aria-hidden="true"></span><strong>Connecting to the bridge...</strong></span>
+      </div>
+      <button id="theme" type="button" class="btn ghost small"><span class="i" aria-hidden="true">moon</span><span class="lbl">Dark theme</span></button>
+    </div>
+  </aside>
+
+  <div class="work">
+    <div id="banner" class="banner error" role="alert" hidden>
+      <span id="banner-icon" class="i" aria-hidden="true">triangle-exclamation</span>
+      <p id="banner-text"></p>
+      <button id="banner-action" type="button" class="btn small">Retry now</button>
+    </div>
+
+    <section class="target" aria-labelledby="clients-title">
+      <h2 id="clients-title"><span class="i" aria-hidden="true">computer-monitor</span><span>Roblox client</span></h2>
+      <div id="clients" class="clients"></div>
+      <p id="clients-hint" class="hint-right">Tools use the newest client. Pick one to lock it.</p>
+    </section>
+
+    <main id="main" class="stage">
+      <!-- Logs -->
+      <section class="panel" role="tabpanel" id="panel-logs" aria-labelledby="tab-logs">
+        <header class="panel-head">
+          <div class="titles">
+            <h2>Logs</h2>
+            <p>Console output from the game, as it happens.</p>
+          </div>
+          <div class="head-actions">
+            <button id="log-pause" type="button" class="btn" aria-pressed="false"><span class="i" aria-hidden="true">pause-small</span><span class="lbl">Pause</span></button>
+            <button id="log-clear" type="button" class="btn"><span class="i" aria-hidden="true">trash-can</span><span class="lbl">Clear</span></button>
+          </div>
+        </header>
+        <div class="toolbar">
+          <div class="field">
+            <label for="log-level">Level</label>
+            <span class="select"><select id="log-level">
+              <option value="">All levels</option>
+              <option value="info">Info</option>
+              <option value="warn">Warnings</option>
+              <option value="error">Errors</option>
+            </select></span>
+          </div>
+          <div class="field grow">
+            <label for="log-search">Search</label>
+            <span class="search"><span class="i" aria-hidden="true">magnifying-glass</span><input id="log-search" type="search" placeholder="Filter lines"></span>
+          </div>
+          <label class="check"><input id="log-scroll" type="checkbox" checked> Follow new lines</label>
+        </div>
+        <div id="log-state" class="state-box">Loading logs...</div>
+        <div id="log-list" class="log-list" role="log" aria-live="off" aria-label="Console output" tabindex="0" hidden></div>
+        <p id="log-count" class="status-line"></p>
+      </section>
+
+      <!-- Errors -->
+      <section class="panel" role="tabpanel" id="panel-errors" aria-labelledby="tab-errors" hidden>
+        <header class="panel-head">
+          <div class="titles">
+            <h2>Errors</h2>
+            <p>Script errors with their stack traces.</p>
+          </div>
+          <div class="head-actions">
+            <button id="error-clear" type="button" class="btn"><span class="i" aria-hidden="true">trash-can</span><span class="lbl">Clear</span></button>
+          </div>
+        </header>
+        <div class="toolbar">
+          <div class="field grow">
+            <label for="error-search">Search</label>
+            <span class="search"><span class="i" aria-hidden="true">magnifying-glass</span><input id="error-search" type="search" placeholder="Filter by message, script or trace"></span>
+          </div>
+        </div>
+        <div id="error-state" class="state-box">Loading errors...</div>
+        <div id="error-list" class="error-list" hidden></div>
+      </section>
+
+      <!-- Run Lua -->
+      <section class="panel" role="tabpanel" id="panel-console" aria-labelledby="tab-console" hidden>
+        <header class="panel-head">
+          <div class="titles">
+            <h2>Run Lua</h2>
+            <p id="lua-hint" class="note">Code runs with your executor's full permissions.</p>
+          </div>
+          <div class="head-actions">
+            <button id="lua-clear" type="button" class="btn"><span class="i" aria-hidden="true">x</span><span class="lbl">Clear output</span></button>
+            <button id="lua-run" type="button" class="btn primary"><span class="i" aria-hidden="true">play-small</span><span class="lbl">Run</span></button>
+          </div>
+        </header>
+        <div class="editor">
+          <label class="label" for="lua-code">Lua code</label>
+          <textarea id="lua-code" class="mono" spellcheck="false" placeholder="return game.PlaceId"></textarea>
+        </div>
+        <div class="toolbar center">
+          <div class="field">
+            <label class="sr-only" for="lua-timeout">Timeout</label>
+            <span class="select"><select id="lua-timeout" aria-label="Timeout">
+              <option value="15000">Timeout 15 s</option>
+              <option value="30000">Timeout 30 s</option>
+              <option value="60000">Timeout 60 s</option>
+            </select></span>
+          </div>
+          <div class="field">
+            <label class="sr-only" for="lua-history">Recent code</label>
+            <span class="select"><select id="lua-history" aria-label="Recent code"><option value="">Recent code</option></select></span>
+          </div>
+          <span class="hint">Ctrl+Enter runs the code.</span>
+        </div>
+        <p id="lua-status" class="status-line" role="status"></p>
+        <pre id="lua-output" class="output mono" hidden></pre>
+      </section>
+
+      <!-- Explorer -->
+      <section class="panel" role="tabpanel" id="panel-explorer" aria-labelledby="tab-explorer" hidden>
+        <header class="panel-head">
+          <div class="titles">
+            <h2>Explorer</h2>
+            <p>Browse the game tree and read properties.</p>
+          </div>
+        </header>
+        <form id="explorer-form" class="toolbar">
+          <div class="field grow">
+            <label for="explorer-path">Instance path</label>
+            <input id="explorer-path" type="text" value="game" autocomplete="off" spellcheck="false">
+          </div>
+          <button id="explorer-go" type="submit" class="btn primary"><span class="i" aria-hidden="true">arrow-medium-right</span><span class="lbl">Open</span></button>
+        </form>
+        <nav id="crumbs" class="crumbs" aria-label="Path"></nav>
+        <div id="explorer-state" class="state-box">Connect a Roblox client, then open a path.</div>
+        <div id="explorer-body" class="split" hidden>
+          <div class="box">
+            <h3 id="children-title">Children</h3>
+            <div id="children" class="children"></div>
+          </div>
+          <div class="box">
+            <h3>Properties</h3>
+            <div class="props-wrap"><table class="props" id="props"><tbody></tbody></table></div>
+            <form id="props-form" class="props-add">
+              <label class="sr-only" for="props-input">Property names</label>
+              <input id="props-input" type="text" value="Name, ClassName, Parent" autocomplete="off" spellcheck="false">
+              <button type="submit" class="btn small"><span class="i" aria-hidden="true">arrow-rotate-right</span><span class="lbl">Read</span></button>
+            </form>
+          </div>
+        </div>
+      </section>
+
+      <!-- Screenshot -->
+      <section class="panel" role="tabpanel" id="panel-screenshot" aria-labelledby="tab-screenshot" hidden>
+        <header class="panel-head">
+          <div class="titles">
+            <h2>Screenshot</h2>
+            <p>The Roblox window on the computer that runs the bridge. Windows only, and the window must be visible.</p>
+          </div>
+          <div class="head-actions">
+            <a id="shot-download" class="btn" download="roblox.jpg" hidden><span class="i" aria-hidden="true">arrow-down-to-line</span><span class="lbl">Download</span></a>
+            <button id="shot-take" type="button" class="btn primary"><span class="i" aria-hidden="true">photo-camera</span><span class="lbl">Take screenshot</span></button>
+          </div>
+        </header>
+        <div class="toolbar center">
+          <div class="field">
+            <label class="sr-only" for="shot-width">Width</label>
+            <span class="select"><select id="shot-width" aria-label="Width">
+              <option value="960">Width 960</option>
+              <option value="1280" selected>Width 1280</option>
+              <option value="1920">Width 1920</option>
+            </select></span>
+          </div>
+          <label class="check"><input id="shot-focus" type="checkbox"> Bring the window to the front</label>
+          <label class="check"><input id="shot-live" type="checkbox"> Keep refreshing</label>
+        </div>
+        <p id="shot-status" class="status-line" role="status"></p>
+        <div class="shot-frame" id="shot-frame"><span id="shot-empty" class="shot-empty"><span class="i" aria-hidden="true">frame-camera</span><span>No screenshot yet.</span></span><img id="shot-img" alt="Screenshot of the Roblox window" hidden></div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<dialog id="token-dialog" aria-labelledby="token-title">
+  <form id="token-form" method="dialog">
+    <h2 id="token-title"><span class="i" aria-hidden="true">key</span><span>Token required</span></h2>
+    <p class="muted">This bridge was started with BRIDGE_TOKEN. Paste the same value to continue. It is kept for this browser tab only.</p>
+    <div class="field">
+      <label for="token-input">Token</label>
+      <input id="token-input" type="password" autocomplete="off" spellcheck="false">
+    </div>
+    <p id="token-error" class="status-line error" hidden>That token was not accepted.</p>
+    <div class="actions">
+      <button type="button" id="token-cancel" class="btn">Cancel</button>
+      <button type="submit" id="token-save" class="btn primary" value="save">Continue</button>
+    </div>
+  </form>
+</dialog>
+</body>
+</html>

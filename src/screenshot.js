@@ -20,22 +20,59 @@ class ScreenshotError extends Error {
 
 const POWERSHELL_SCRIPT = `
 $ErrorActionPreference = 'Stop'
+$clock = [System.Diagnostics.Stopwatch]::StartNew()
+$timings = [ordered]@{}
 try {
   Add-Type -AssemblyName System.Drawing
-  Add-Type -TypeDefinition @"
+
+  # The Win32 calls are declared without compiling C#. Add-Type starts the C# compiler, which was the
+  # slowest step of a capture and sometimes took more than 10 seconds on a busy computer.
+  function New-NativeType {
+    $assembly = [AppDomain]::CurrentDomain.DefineDynamicAssembly((New-Object System.Reflection.AssemblyName 'SuperbaseNative'), [System.Reflection.Emit.AssemblyBuilderAccess]::Run)
+    $module = $assembly.DefineDynamicModule('SuperbaseNative')
+    $builder = $module.DefineType('SuperbaseWin', [System.Reflection.TypeAttributes]'Public, Class')
+    $methods = @(
+      @('GetWindowRect', [bool], [Type[]]@([IntPtr], [IntPtr])),
+      @('IsIconic', [bool], [Type[]]@([IntPtr])),
+      @('ShowWindow', [bool], [Type[]]@([IntPtr], [int])),
+      @('SetForegroundWindow', [bool], [Type[]]@([IntPtr])),
+      @('SetProcessDPIAware', [bool], [Type[]]@())
+    )
+    foreach ($entry in $methods) {
+      $method = $builder.DefinePInvokeMethod($entry[0], 'user32.dll', [System.Reflection.MethodAttributes]'Public, Static, PinvokeImpl', [System.Reflection.CallingConventions]::Standard, $entry[1], $entry[2], [System.Runtime.InteropServices.CallingConvention]::Winapi, [System.Runtime.InteropServices.CharSet]::Auto)
+      $method.SetImplementationFlags([System.Reflection.MethodImplAttributes]'PreserveSig')
+    }
+    $type = $builder.CreateType()
+    # A call with a null window proves that the declarations work.
+    $type::IsIconic([IntPtr]::Zero) | Out-Null
+    return $type
+  }
+
+  # Fallback when the first way is not available on this computer.
+  function New-NativeTypeCompiled {
+    Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
-public static class SuperbaseWin {
-    [StructLayout(LayoutKind.Sequential)]
-    public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
-    [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+public static class SuperbaseWinCompiled {
+    [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, IntPtr rect);
     [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
 }
 "@
-  [SuperbaseWin]::SetProcessDPIAware() | Out-Null
+    return [SuperbaseWinCompiled]
+  }
+
+  $native = $null
+  $nativeKind = 'reflection'
+  try { $native = New-NativeType } catch { $native = $null }
+  if ($null -eq $native) {
+    $nativeKind = 'compiled'
+    $native = New-NativeTypeCompiled
+  }
+  $native::SetProcessDPIAware() | Out-Null
+  $timings['native'] = $clock.ElapsedMilliseconds
 
   $candidates = @(Get-Process -Name RobloxPlayerBeta -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero })
   if ($candidates.Count -eq 0) {
@@ -49,33 +86,43 @@ public static class SuperbaseWin {
   $proc = $candidates[0]
   $handle = $proc.MainWindowHandle
   $focus = ($env:SB_FOCUS -eq '1')
+  $timings['find'] = $clock.ElapsedMilliseconds
 
-  if ([SuperbaseWin]::IsIconic($handle)) {
+  if ($native::IsIconic($handle)) {
     if (-not $focus) {
       Write-Output '{"error":"minimized"}'
       exit 0
     }
-    [SuperbaseWin]::ShowWindow($handle, 9) | Out-Null
+    $native::ShowWindow($handle, 9) | Out-Null
     Start-Sleep -Milliseconds 400
   }
   if ($focus) {
-    [SuperbaseWin]::SetForegroundWindow($handle) | Out-Null
+    $native::SetForegroundWindow($handle) | Out-Null
     Start-Sleep -Milliseconds 350
   }
 
-  $rect = New-Object SuperbaseWin+RECT
-  [SuperbaseWin]::GetWindowRect($handle, [ref]$rect) | Out-Null
-  $width = $rect.Right - $rect.Left
-  $height = $rect.Bottom - $rect.Top
-  if ($width -le 0 -or $height -le 0) {
+  $buffer = [System.Runtime.InteropServices.Marshal]::AllocHGlobal(16)
+  try {
+    $found = $native::GetWindowRect($handle, $buffer)
+    $left = [System.Runtime.InteropServices.Marshal]::ReadInt32($buffer, 0)
+    $top = [System.Runtime.InteropServices.Marshal]::ReadInt32($buffer, 4)
+    $right = [System.Runtime.InteropServices.Marshal]::ReadInt32($buffer, 8)
+    $bottom = [System.Runtime.InteropServices.Marshal]::ReadInt32($buffer, 12)
+  } finally {
+    [System.Runtime.InteropServices.Marshal]::FreeHGlobal($buffer)
+  }
+  $width = $right - $left
+  $height = $bottom - $top
+  if (-not $found -or $width -le 0 -or $height -le 0 -or $width -gt 16384 -or $height -gt 16384) {
     Write-Output '{"error":"empty"}'
     exit 0
   }
 
   $bitmap = New-Object System.Drawing.Bitmap($width, $height)
   $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-  $graphics.CopyFromScreen($rect.Left, $rect.Top, 0, 0, $bitmap.Size)
+  $graphics.CopyFromScreen($left, $top, 0, 0, $bitmap.Size)
   $graphics.Dispose()
+  $timings['capture'] = $clock.ElapsedMilliseconds
 
   $maxWidth = [int]$env:SB_MAX_WIDTH
   $output = $bitmap
@@ -83,26 +130,27 @@ public static class SuperbaseWin {
     $newHeight = [int][Math]::Round($height * $maxWidth / $width)
     $output = New-Object System.Drawing.Bitmap($maxWidth, $newHeight)
     $scaler = [System.Drawing.Graphics]::FromImage($output)
-    $scaler.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+    $scaler.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBilinear
     $scaler.DrawImage($bitmap, 0, 0, $maxWidth, $newHeight)
     $scaler.Dispose()
   }
+  $timings['scale'] = $clock.ElapsedMilliseconds
 
-  $codec = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq 'image/jpeg' } | Select-Object -First 1
+  $codec = $null
+  foreach ($candidate in [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders()) {
+    if ($candidate.MimeType -eq 'image/jpeg') { $codec = $candidate; break }
+  }
   $encoderParams = New-Object System.Drawing.Imaging.EncoderParameters(1)
   $encoderParams.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter([System.Drawing.Imaging.Encoder]::Quality, [long]80)
   $stream = New-Object System.IO.MemoryStream
   $output.Save($stream, $codec, $encoderParams)
+  $encoded = [Convert]::ToBase64String($stream.ToArray())
+  $timings['encode'] = $clock.ElapsedMilliseconds
 
-  $result = @{
-    ok = $true
-    mimeType = 'image/jpeg'
-    width = $output.Width
-    height = $output.Height
-    title = $proc.MainWindowTitle
-    data = [Convert]::ToBase64String($stream.ToArray())
-  }
-  Write-Output ($result | ConvertTo-Json -Compress)
+  # The base64 text is built by hand, because ConvertTo-Json is slow on large strings.
+  $titleJson = ConvertTo-Json -InputObject ([string]$proc.MainWindowTitle) -Compress
+  $timingsJson = $timings | ConvertTo-Json -Compress
+  Write-Output ('{"ok":true,"mimeType":"image/jpeg","width":' + $output.Width + ',"height":' + $output.Height + ',"title":' + $titleJson + ',"native":"' + $nativeKind + '","timings":' + $timingsJson + ',"data":"' + $encoded + '"}')
 } catch {
   $message = $_.Exception.Message -replace '[\\r\\n"\\\\]', ' '
   Write-Output ('{"error":"failed","detail":"' + $message + '"}')
@@ -195,6 +243,7 @@ async function captureRobloxWindow({
     width: result.width,
     height: result.height,
     title: result.title || null,
+    ...(result.timings ? { timings: result.timings, native: result.native } : {}),
   };
 }
 

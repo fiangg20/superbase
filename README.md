@@ -8,12 +8,6 @@
   <strong>Let an AI assistant debug your live Roblox game.</strong>
 </p>
 
-<div align="center">
-
-[![Verified by M8ven](https://m8ven.ai/badge/mcp/fiangg20-superbase-1nmxtn)](https://m8ven.ai/verified?check=https%3A%2F%2Fgithub.com%2Ffiangg20%2Fsuperbase)
-
-</div>
-
 Superbase is a local [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that connects AI assistants to running Roblox sessions through your executor. The AI can read the console and script errors, explore the instance tree with CSS-like selectors, read and search script sources, spy on remote calls, operate the GUI, take screenshots, change properties and run Lua. It always knows whether Roblox is actually connected, and you can watch everything in a local web dashboard.
 
 - **Zero configuration.** No token, no account, no copy and paste. Start the bridge, run one line in your executor, add the MCP server to your AI client.
@@ -46,11 +40,10 @@ Superbase is a local [Model Context Protocol](https://modelcontextprotocol.io) (
 - [HTTP API](#http-api)
 - [Security](#security)
 - [Project layout](#project-layout)
+- [Fonts and icons](#fonts-and-icons)
 - [Development](#development)
 - [Troubleshooting](#troubleshooting)
 - [FAQ](#faq)
-- [License](#license)
-- [Credits](#credits)
 
 ## How it works
 
@@ -581,9 +574,11 @@ Open `http://127.0.0.1:9731/` while the bridge runs. It works in any browser on 
 | Errors | Script errors with their stack trace, with a filter and clear. |
 | Run Lua | A code box that runs on the selected client (Ctrl+Enter), with a timeout and a list of recent code. |
 | Explorer | Browse the instance tree by path or by clicking, and read properties. |
-| Screenshot | Capture the Roblox window, also every 3 seconds, and download the image. Windows only. |
+| Screenshot | Capture the Roblox window, also continuously, and download the image. Windows only. |
 
 The page itself contains no data. It reads everything through the same API as the MCP server, with the same checks. In [token mode](#token-mode) it asks for the token once and keeps it for that browser tab only.
+
+The dashboard is plain HTML, CSS and JavaScript in `src/dashboard/`, with no build step. Text is set in Builder Sans (regular weight only) and icons come from Builder Icons, both from `assets/fonts/`. Builder Icons are ligature fonts: the icon name written as text becomes the glyph, in the Regular font for outlined icons and in the Filled font for selected or active ones. If a font file is missing, the page falls back to system fonts and leaves the icons out. See [Fonts and icons](#fonts-and-icons) for the license note.
 
 ## Connection states
 
@@ -608,7 +603,7 @@ The bridge pings every client every 10 seconds and drops one after 30 seconds of
 
 **Intro.** A short animated intro plays when the client starts. It does not delay the connection.
 
-**Notifications.** Small toasts appear in the top right corner:
+**Notifications.** Small toasts appear in the top right corner, with an icon, a title and a line of text in Builder Sans. The icons come from the Builder Icons font that ships with Roblox (`rbxasset://LuaPackages/Packages/_Index/BuilderIcons/BuilderIcons/BuilderIcons.json`). The icon name is the text of the label, the Bold weight draws the filled icon and the Regular weight the outlined one. If Roblox does not have the font, the toast shows a dot instead, and if it does not have Builder Sans it uses Gotham.
 
 | Notification | When |
 | --- | --- |
@@ -685,11 +680,12 @@ In token mode `/client.lua` is not served, so there is no `loadstring` loader. T
 
 ## HTTP API
 
-The MCP server and the dashboard use this API, and so can your own tools. In open mode every request needs a header named `x-superbase-client` (any value). In token mode it needs `x-bridge-token: <token>` instead. `GET /`, `GET /icon.png` and `GET /client.lua` need neither.
+The MCP server and the dashboard use this API, and so can your own tools. In open mode every request needs a header named `x-superbase-client` (any value). In token mode it needs `x-bridge-token: <token>` instead. `GET /`, the dashboard files, `GET /icon.png` and `GET /client.lua` need neither.
 
 | Request | Purpose |
 | --- | --- |
 | `GET /` | The dashboard page. It holds no data. |
+| `GET /dashboard.css`, `/dashboard.js`, `/theme-init.js`, `/fonts/<file>` | The files of the dashboard. Only these exact paths are served: the three fonts in `assets/fonts` and the dashboard files, nothing else on disk. |
 | `GET /client.lua` | The executor client with its URL set to this bridge. Open mode only. |
 | `GET /status` | Connection info. Query: `probe=1` pings the client first, `client` selects one. |
 | `GET /clients` | The connected clients. |
@@ -712,7 +708,7 @@ Superbase gives an AI the same power over your game client as your executor has.
 
 - **Code execution.** `execute_lua`, `set_property` and `gui_interact` run code inside your executor. Review what the AI wants to run before you approve it, and only connect clients you trust.
 - **Local only.** The bridge binds to `127.0.0.1`. Never expose the port to a network or the internet.
-- **Web pages are blocked.** The bridge checks the `Host` header, rejects any HTTP request or WebSocket connection that carries a foreign `Origin`, never approves a CORS preflight and requires a custom header on every API call. A web page you visit cannot reach it. The dashboard is served with a strict Content Security Policy and cannot be embedded in another page, and it shows log text as plain text only.
+- **Web pages are blocked.** The bridge checks the `Host` header, rejects any HTTP request or WebSocket connection that carries a foreign `Origin`, never approves a CORS preflight and requires a custom header on every API call. A web page you visit cannot reach it. The dashboard is served with a strict Content Security Policy (styles, scripts and fonts only from the bridge itself, no inline code) and cannot be embedded in another page, and it shows log text as plain text only.
 - **Other programs are not blocked in open mode.** Without a token, any program running on your computer can use the bridge. Use [token mode](#token-mode) if that matters to you.
 - **Remote spy sees private data.** Remote calls can contain chat messages and other personal data of the game. The recorded calls stay in the memory of your executor, up to `max_calls`, and are sent to your AI client when it reads them.
 - **Screenshots capture pixels.** The `screenshot` tool copies the screen area of the Roblox window, so anything that covers the window is captured too. The image goes to your AI client.
@@ -726,7 +722,11 @@ superbase/
 ├── src/
 │   ├── bridge.js           WebSocket server, local HTTP API, dashboard host
 │   ├── mcp-server.js       MCP server (stdio), no dependencies
-│   ├── dashboard.html      The web dashboard (one file, no build step)
+│   ├── dashboard/          The web dashboard, no build step
+│   │   ├── index.html
+│   │   ├── dashboard.css
+│   │   ├── dashboard.js
+│   │   └── theme-init.js
 │   ├── selector.js         Parser for the find_instances selector language
 │   ├── screenshot.js       Windows window capture used by the bridge
 │   └── lua/                Lua snippets behind the higher level tools
@@ -742,7 +742,11 @@ superbase/
 ├── roblox/
 │   └── client.lua          Runs in the executor
 ├── assets/
-│   └── icon.png
+│   ├── icon.png
+│   └── fonts/              Builder Sans and Builder Icons used by the dashboard
+│       ├── BuilderSans-Regular-400.otf
+│       ├── BuilderIcons-Regular.ttf
+│       └── BuilderIcons-Filled.ttf
 ├── test/
 │   ├── bridge.test.js
 │   ├── mcp-server.test.js
@@ -751,11 +755,13 @@ superbase/
 │   ├── lua.test.js
 │   ├── lua-runtime.test.js
 │   └── lua/                Mock of the Roblox API for the snippet tests
-├── LICENSE
-├── package-lock.json
 ├── package.json
 └── README.md
 ```
+
+## Fonts and icons
+
+The dashboard uses Builder Sans (Regular, 400) from [Shuiux/Roblox-Builder-Fonts](https://github.com/Shuiux/Roblox-Builder-Fonts) and Builder Icons from [fiangg20/Builder-Icons](https://github.com/fiangg20/Builder-Icons). These are Roblox's fonts. They are not covered by the MIT license of this project, they stay the property of their owner, and their own license terms apply (the Builder Sans license text limits its use to Roblox related brand materials). Check those terms before you redistribute them. Superbase works without them: delete the files in `assets/fonts` and the dashboard falls back to your system fonts and shows no icons.
 
 ## Development
 
@@ -821,13 +827,4 @@ It works wherever your executor can run scripts. Some games detect or block exec
 **Is it affiliated with Roblox?**
 No. Superbase is an independent project.
 
-## License
-
-Superbase is released under the [MIT License](LICENSE). You may use, copy, modify and distribute it, including in commercial projects, as long as the copyright notice and the license text stay with it. The software comes without any warranty. You are responsible for where and how you use it, see [Security](#security).
-
-## Credits
-
-- Built by [Bases](https://github.com/fiangg20) ([@fyandevelopers](https://www.roblox.com/users/5349151666/profile))
-- MCP implementation inspired by the [Model Context Protocol](https://modelcontextprotocol.io)
-
-Superbase is an independent project and is not affiliated with Roblox.
+[![M8ven Score](https://m8ven.ai/badge/mcp/fiangg20-superbase-1nmxtn?v=66217098fa518e7a66a609905ea7ba9d)](https://m8ven.ai/mcp/fiangg20-superbase-1nmxtn?s=readme)
