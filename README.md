@@ -51,6 +51,7 @@ Superbase is a local [Model Context Protocol](https://modelcontextprotocol.io) (
 - [Development](#development)
 - [Troubleshooting](#troubleshooting)
 - [FAQ](#faq)
+- [Support](#support)
 - [License](#license)
 - [Credits](#credits)
 
@@ -949,6 +950,16 @@ It works wherever your executor can run scripts. Some games detect or block exec
 
 **Is it affiliated with Roblox?**
 No. Superbase is an independent project.
+
+## Support
+
+Superbase is free and open source, and it stays that way. Every feature is available to everyone, and nothing is locked behind a payment.
+
+If it saves you time and you want to say thanks, you can support the project on Saweria. It is completely optional, and it helps me keep fixing bugs, testing new executors and adding features.
+
+[![Support on Saweria](https://img.shields.io/badge/Support%20on-Saweria-F7A823?style=for-the-badge)](https://saweria.co/bases)
+
+You can pay with QRIS, e-wallets or bank transfer. Not able to donate? A star on the repository, a bug report or a pull request helps just as much.
 
 ## License
 
