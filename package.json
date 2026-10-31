@@ -4,12 +4,27 @@
   "description": "Superbase: a local MCP server that connects AI assistants to live Roblox executor sessions. Read logs and errors, explore the instance tree with selectors, read and search scripts, spy on remotes, operate the GUI, take screenshots and run Lua, with a web dashboard and the connection status reported on every call.",
   "private": true,
   "main": "src/bridge.js",
+  "bin": {
+    "superbase": "src/bridge.js",
+    "superbase-mcp": "src/mcp-server.js",
+    "superbase-setup": "scripts/install.js"
+  },
   "scripts": {
     "start": "node src/bridge.js",
     "mcp": "node src/mcp-server.js",
-    "test": "node test/selector.test.js && node test/screenshot.test.js && node test/lua.test.js && node test/lua-runtime.test.js && node test/bridge.test.js && node test/mcp-server.test.js"
+    "setup": "node scripts/install.js",
+    "delete": "node scripts/install.js --uninstall",
+    "uninstall-mcp": "node scripts/install.js --uninstall",
+    "test": "node test/selector.test.js && node test/screenshot.test.js && node test/lua.test.js && node test/lua-runtime.test.js && node test/bridge.test.js && node test/mcp-server.test.js && node test/install.test.js && node test/terminal.test.js"
   },
-  "keywords": ["mcp", "roblox", "executor", "luau", "debugging", "ai"],
+  "keywords": [
+    "mcp",
+    "roblox",
+    "executor",
+    "luau",
+    "debugging",
+    "ai"
+  ],
   "engines": {
     "node": ">=18"
   },

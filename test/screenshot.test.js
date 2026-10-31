@@ -52,6 +52,8 @@ async function main() {
   const timed = await captureRobloxWindow({ platform: "win32", run: async () => ({ stdout: JSON.stringify({ ok: true, mimeType: "image/jpeg", width: 2, height: 2, title: "Roblox", data: "QQ==", native: "reflection", timings: { native: 40, find: 90, capture: 300, scale: 340, encode: 420 } }), stderr: "" }) });
   assert.deepStrictEqual(timed.timings, { native: 40, find: 90, capture: 300, scale: 340, encode: 420 });
   assert.strictEqual(timed.native, "reflection");
+  const printed = await captureRobloxWindow({ platform: "win32", run: async () => ({ stdout: JSON.stringify({ ok: true, mimeType: "image/jpeg", width: 2, height: 2, title: "Roblox", data: "QQ==", method: "printwindow" }), stderr: "" }) });
+  assert.strictEqual(printed.method, "printwindow", "the capture method is passed along");
 
   const plain = await captureRobloxWindow({ platform: "win32", run: async (script, env) => ({ stdout: JSON.stringify({ ok: true, mimeType: "image/jpeg", width: 1, height: 1, data: "QQ==", env }), stderr: "" }) });
   assert.strictEqual(plain.title, null, "a missing title becomes null");
@@ -79,6 +81,10 @@ async function main() {
   assert.strictEqual((POWERSHELL_SCRIPT.match(/\(/g) || []).length, (POWERSHELL_SCRIPT.match(/\)/g) || []).length, "parentheses in the script are balanced");
   assert.ok(POWERSHELL_SCRIPT.includes("DefineDynamicAssembly") && POWERSHELL_SCRIPT.includes("New-NativeTypeCompiled"), "the script avoids the C# compiler and keeps it as a fallback");
   assert.ok(!/\$\{/.test(POWERSHELL_SCRIPT), "no template placeholders are left in the script");
+  for (const needle of ["GetForegroundWindow", "New-NativeTypeExtra", "keybd_event", "DwmGetWindowAttribute", "$previous", "PrintWindow", "GetClientRect", "ClientToScreen", "$method"]) {
+    assert.ok(POWERSHELL_SCRIPT.includes(needle), `the script must mention ${needle}`);
+  }
+  assert.ok(/\$extra = \$null\s*\n\s*try \{ \$extra = New-NativeTypeExtra \} catch/.test(POWERSHELL_SCRIPT), "the optional helpers can never break the capture");
 
   console.log("ALL SCREENSHOT CHECKS PASSED");
 }

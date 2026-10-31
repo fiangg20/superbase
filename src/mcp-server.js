@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 "use strict";
 
 // Superbase MCP server (stdio transport).
@@ -761,12 +762,12 @@ const tools = [
     name: "screenshot",
     title: "Screenshot the Roblox window",
     description:
-      "Take a screenshot of the Roblox window and return it as an image, so you can see what the player sees. It captures the real window on the computer where the bridge runs (Windows only), so the window must be visible: not minimized and not covered by another window. With focus true it restores and raises the window first. Does not need the executor connection.",
+      "Take a screenshot of the Roblox window and return it as an image, so you can see what the player sees. It captures the real window on the computer where the bridge runs (Windows only), so the window must be visible: not minimized and not covered by another window. It asks Windows to draw the Roblox window itself, so other windows in front of it do not end up in the picture and nothing is raised. If that gives no usable picture, it falls back to copying the screen area of the window: with focus true (default) Roblox is raised for a moment and your previous window is put back, with focus false the screen is copied as it is. Does not need the executor connection.",
     inputSchema: {
       type: "object",
       properties: {
         max_width: { type: "integer", minimum: 320, maximum: 1920, description: "Scale the image down to this width (default 1280)." },
-        focus: { type: "boolean", description: "Restore and raise the window before capturing (default false)." },
+        focus: { type: "boolean", description: "Allow the fallback to raise the Roblox window for a moment and put the previous window back (default true). Set false to never touch the windows." },
       },
       additionalProperties: false,
     },
@@ -774,7 +775,7 @@ const tools = [
     run: async (args) => {
       const query = new URLSearchParams();
       if (args.max_width !== undefined) query.set("max_width", String(clampInt(args.max_width, 320, 1920, 1280)));
-      if (args.focus === true) query.set("focus", "1");
+      if (args.focus !== false) query.set("focus", "1");
       const suffix = query.toString();
       const shot = await bridgeRequest("GET", `/screenshot${suffix ? `?${suffix}` : ""}`, undefined, SCREENSHOT_TIMEOUT_MS);
       return { image: { data: shot.data, mimeType: shot.mimeType }, width: shot.width, height: shot.height, title: shot.title };

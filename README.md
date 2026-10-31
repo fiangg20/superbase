@@ -8,6 +8,12 @@
   <strong>Let an AI assistant debug your live Roblox game.</strong>
 </p>
 
+<div align="center">
+
+[![Verified by M8ven](https://m8ven.ai/badge/mcp/fiangg20-superbase-1nmxtn)](https://m8ven.ai/verified?check=https%3A%2F%2Fgithub.com%2Ffiangg20%2Fsuperbase)
+
+</div>
+
 Superbase is a local [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that connects AI assistants to running Roblox sessions through your executor. The AI can read the console and script errors, explore the instance tree with CSS-like selectors, read and search script sources, spy on remote calls, operate the GUI, take screenshots, change properties and run Lua. It always knows whether Roblox is actually connected, and you can watch everything in a local web dashboard.
 
 - **Zero configuration.** No token, no account, no copy and paste. Start the bridge, run one line in your executor, add the MCP server to your AI client.
@@ -15,7 +21,7 @@ Superbase is a local [Model Context Protocol](https://modelcontextprotocol.io) (
 - **18 tools** for logs, errors, inspection, selectors, hierarchy trees, script listing and search, remote spying, GUI interaction, screenshots, properties and code execution.
 - **Several Roblox windows at once.** Every client gets an id, and every tool takes a `client` argument to pick one.
 - **Web dashboard.** Live logs, errors, a Lua console, an instance explorer and screenshots at `http://127.0.0.1:9731/`.
-- **Works with any MCP client** that supports stdio servers: Claude Desktop, Claude Code, Cursor, Windsurf, VS Code, Codex CLI, Antigravity and more.
+- **Works with any MCP client** that supports stdio servers: Claude Desktop, Claude Code, Cursor, Windsurf, VS Code, Codex CLI, Antigravity, Cline, Roo Code, Kiro, Qwen Code, OpenCode and more.
 - **Local only.** Everything listens on `127.0.0.1`. Web pages cannot reach it.
 - **No dependencies** in the MCP server. The bridge needs only [`ws`](https://github.com/websockets/ws).
 
@@ -26,6 +32,7 @@ Superbase is a local [Model Context Protocol](https://modelcontextprotocol.io) (
 - [How it works](#how-it-works)
 - [Requirements](#requirements)
 - [Quick start](#quick-start)
+- [One line install](#one-line-install)
 - [Connect your AI client](#connect-your-ai-client)
 - [Example prompts](#example-prompts)
 - [Tools reference](#tools-reference)
@@ -44,6 +51,8 @@ Superbase is a local [Model Context Protocol](https://modelcontextprotocol.io) (
 - [Development](#development)
 - [Troubleshooting](#troubleshooting)
 - [FAQ](#faq)
+- [License](#license)
+- [Credits](#credits)
 
 ## How it works
 
@@ -92,10 +101,26 @@ npm start
 The bridge prints the loader for your executor and the address of the dashboard:
 
 ```
-[superbase] bridge 1.3.0 listening on ws://127.0.0.1:9731 (HTTP API on the same port)
-[superbase] dashboard: http://127.0.0.1:9731/
-[superbase] load the client in your executor with: loadstring(game:HttpGet("http://127.0.0.1:9731/client.lua"))()
+  ╭────────────────────────────────────────────╮
+  │  Superbase Bridge 1.3.0                    │
+  │  Roblox executor and AI, connected         │
+  ╰────────────────────────────────────────────╯
+
+  ● Running     ws://127.0.0.1:9731
+  ● Dashboard   http://127.0.0.1:9731/
+  ● Mode        open (no token, web pages are blocked)
+
+  Load this in your executor
+    loadstring(game:HttpGet("http://127.0.0.1:9731/client.lua"))()
+
+  Waiting for a Roblox client. Press Ctrl+C to stop.
+
+  12:55:07  ✔ executor connected as c1 (placeId=123, executor=Athena, user=Tester)
 ```
+
+Every event after that gets one line with the time: a client that connects, disconnects or stops responding, and rejected connections. If the port is already taken, the bridge says so and prints the command for another port. If the dependency is missing it tells you to run `npm install`.
+
+When the output goes to a file or a pipe, or when `SUPERBASE_PLAIN=1` is set, the bridge prints plain `[superbase] ...` lines without colors. `NO_COLOR=1` keeps the layout and removes only the colors.
 
 **2. Load the client in your game**
 
@@ -111,7 +136,7 @@ If your executor blocks `HttpGet` to `localhost`, paste the contents of [`roblox
 
 **3. Add Superbase to your AI client**
 
-Add the server to your client's MCP configuration (for Claude Desktop, see below for the other clients):
+The quickest way is the [one line install](#one-line-install), or `npm run setup` from this folder. It finds your AI clients and registers the server for you. To do it by hand, add the server to your client's MCP configuration (for Claude Desktop, see below for the other clients):
 
 ```json
 {
@@ -127,6 +152,67 @@ Add the server to your client's MCP configuration (for Claude Desktop, see below
 Restart the client, then ask: *"Check the Roblox connection."* The AI calls `roblox_status` and answers.
 
 You do not have to remember the loader line. While no game is connected, every tool result from the AI contains it, and the AI shows it to you. The dashboard shows it too.
+
+## One line install
+
+The installer downloads Superbase, installs the one dependency and registers the MCP server in every supported AI client it finds on your computer, so you do not edit any config file by hand.
+
+**Windows (PowerShell or cmd)**
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/fiangg20/superbase/main/install.ps1 | iex"
+```
+
+**macOS and Linux**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/fiangg20/superbase/main/install.sh | sh
+```
+
+Piping a script into a shell runs whatever it contains, so read [`install.ps1`](install.ps1), [`install.sh`](install.sh) and [`scripts/install.js`](scripts/install.js) first if you want to know what happens. They are short.
+
+The bootstrap script checks for Node.js 18 or newer, downloads the code into `%LOCALAPPDATA%\Superbase` (`~/.superbase` on macOS and Linux), runs `npm install` and then runs `scripts/install.js`. That script shows the clients it found as a checklist (arrow keys to move, space to tick, `a` for all, enter to confirm) and writes nothing before you confirm. Clients that are not installed are listed too, but unticked. Before it registers anything it installs the dependency (`npm install`) when `node_modules` is missing, so the server starts on the first try.
+
+If you already cloned the repository, run the last step yourself. It installs the dependency too:
+
+```bash
+npm run setup
+```
+
+To take Superbase out of your AI clients again:
+
+```bash
+npm run delete
+```
+
+`npm run delete` shows the same checklist and removes only the `superbase` entry from the clients you confirm. Your other servers and settings stay, and a backup is made first. It does not delete the Superbase folder, remove it yourself when you no longer need it.
+
+Supported clients: Claude Desktop (including the Microsoft Store version), Claude Code, Cursor, Windsurf, VS Code, VS Code Insiders, Cline, Roo Code, Gemini CLI, Antigravity, Qwen Code, Kiro, OpenCode and Codex CLI.
+
+What the installer does and does not do:
+
+- Every config file is copied to `<file>.superbase-backup-<date>` before it changes. Your other servers and settings stay as they are.
+- It only edits plain JSON and TOML. A file with comments or a shape it does not expect (for example `opencode.jsonc`) is left alone and reported, and you add the entry by hand from the section below.
+- Running it again changes nothing when the entry is already correct, and updates the path when the folder moved.
+- It cannot know about every client. For any other JSON file use `--file`, for example `node scripts/install.js --file path\to\mcp.json --key mcpServers`.
+
+Options for `scripts/install.js`:
+
+| Option | Meaning |
+|---|---|
+| `--yes`, `-y` | Register in every client that was found without asking. |
+| `--list` | Only show which clients were found. |
+| `--dry-run` | Show what would change and write nothing. |
+| `--uninstall` | Remove the `superbase` entry again (`npm run delete`, same as `npm run uninstall-mcp`). |
+| `--client a,b` | Only these clients, by id (`claude-desktop`, `claude-code`, `cursor`, `windsurf`, `vscode`, `vscode-insiders`, `cline`, `roo-code`, `gemini-cli`, `antigravity`, `qwen-code`, `kiro`, `opencode`, `codex`). |
+| `--file <path>` | Edit one JSON file of your choice. Use `--key` (default `mcpServers`) and `--shape standard\|vscode\|opencode`. |
+| `--port <n>` | Set `SUPERBASE_PORT` for the MCP server, when the bridge does not use 9731. |
+| `--node <command>` | The command that starts Node.js (default `node`). Use a full path when `node` is not on the PATH of the client. |
+| `--no-deps` | Do not run `npm install` when the dependency is missing. |
+| `--plain` | No colors and no checklist, only plain lines. This is also used when the output is not a terminal. |
+| `--print` | Print the snippets for manual setup and exit. |
+
+The bootstrap scripts read these environment variables: `SUPERBASE_DIR` (install folder), `SUPERBASE_REF` (branch or tag), `SUPERBASE_ARGS` (options for `scripts/install.js`, for example `--yes`) and `SUPERBASE_START=1` (start the bridge at the end). Restart the AI client after the installer ran, then start the bridge with `npm start`.
 
 ## Connect your AI client
 
@@ -164,7 +250,7 @@ claude mcp add superbase -- node /path/to/superbase/src/mcp-server.js
 </details>
 
 <details>
-<summary><strong>Cursor, Windsurf and Gemini CLI</strong></summary>
+<summary><strong>Cursor, Windsurf, Gemini CLI, Qwen Code, Kiro, Cline and Roo Code</strong></summary>
 
 These clients use the same shape as Claude Desktop.
 
@@ -173,6 +259,10 @@ These clients use the same shape as Claude Desktop.
 | Cursor | `.cursor/mcp.json` (project) or `~/.cursor/mcp.json` (global) |
 | Windsurf | `~/.codeium/windsurf/mcp_config.json` |
 | Gemini CLI | `~/.gemini/settings.json` |
+| Qwen Code | `~/.qwen/settings.json` |
+| Kiro | `~/.kiro/settings/mcp.json` (global) or `.kiro/settings/mcp.json` (project) |
+| Cline | `cline_mcp_settings.json` in the `saoudrizwan.claude-dev/settings` folder of VS Code's `globalStorage`, or **MCP Servers → Configure** in Cline |
+| Roo Code | `mcp_settings.json` in the `rooveterinaryinc.roo-cline/settings` folder of VS Code's `globalStorage`, or the MCP icon in Roo Code |
 
 ```json
 {
@@ -240,6 +330,28 @@ args = ["/path/to/superbase/src/mcp-server.js"]
 ```
 
 </details>
+
+<details>
+<summary><strong>OpenCode</strong></summary>
+
+Add this to `~/.config/opencode/opencode.json`. OpenCode takes the command as one array:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "superbase": {
+      "type": "local",
+      "command": ["node", "/path/to/superbase/src/mcp-server.js"],
+      "enabled": true
+    }
+  }
+}
+```
+
+</details>
+
+**Any other client.** If your client supports MCP servers over stdio, it takes the same three things: the command `node`, the argument `/path/to/superbase/src/mcp-server.js` and, optionally, the environment variable `SUPERBASE_PORT`. Run `node scripts/install.js --print` to see the snippets for the formats above, or `node scripts/install.js --file <path>` for a JSON file the installer does not know.
 
 **Clients that cannot use Superbase.** Superbase is local. Cloud hosted AI chats and mobile or web apps cannot reach `localhost`, so they cannot use it. An AI that has no MCP support but can run shell commands can use the [HTTP API](#http-api) directly.
 
@@ -422,12 +534,12 @@ Visibility takes every ancestor into account, so a button inside a hidden frame 
 
 ### `screenshot`
 
-Takes a screenshot of the Roblox window and returns it as an image, so the AI can see what you see. **Windows only.** It captures the real window on the computer that runs the bridge, so the window must be visible: not minimized and not covered by another window. It does not need the executor connection.
+Takes a screenshot of the Roblox window and returns it as an image, so the AI can see what you see. **Windows only.** It captures the real window on the computer that runs the bridge, so the window must be visible. Superbase first asks Windows to draw the Roblox window itself (`PrintWindow`), so a window in front of it does not end up in the picture and nothing is raised. If that gives no usable picture (some setups return a black frame), it falls back to copying the pixels of the screen area of the window: with `focus` on, Roblox is raised for a moment and your previous window is put back, with `focus` off anything covering Roblox is captured instead. The result tells which `method` was used (`printwindow` or `screen`). It does not need the executor connection.
 
 | Parameter | Type | Description |
 | --- | --- | --- |
 | `max_width` | integer | 320–1920. The image is scaled down to this width. Default 1280. |
-| `focus` | boolean | Restore and raise the window before capturing. Default `false`. |
+| `focus` | boolean | Allow the fallback to raise the Roblox window for a moment and put the window that was in front back. Default `true`. Set `false` to never touch the windows. |
 
 ### `set_property` · needs game
 
@@ -574,7 +686,7 @@ Open `http://127.0.0.1:9731/` while the bridge runs. It works in any browser on 
 | Errors | Script errors with their stack trace, with a filter and clear. |
 | Run Lua | A code box that runs on the selected client (Ctrl+Enter), with a timeout and a list of recent code. |
 | Explorer | Browse the instance tree by path or by clicking, and read properties. |
-| Screenshot | Capture the Roblox window, also continuously, and download the image. Windows only. |
+| Screenshot | Capture the Roblox window, also every 3 seconds, and download the image. Windows only. |
 
 The page itself contains no data. It reads everything through the same API as the MCP server, with the same checks. In [token mode](#token-mode) it asks for the token once and keeps it for that browser tab only.
 
@@ -664,6 +776,7 @@ Environment variables. Set them for the process that uses them: the bridge is st
 | `SUPERBASE_CLIENT_URL` | MCP server | the bridge's `/client.lua` | URL used in the `loadstring` script, for example a public raw GitHub link. |
 | `SUPERBASE_PING_MS` | bridge | `10000` | Heartbeat interval. |
 | `SUPERBASE_STALE_MS` | bridge | `30000` | Drop a client that was silent this long. |
+| `SUPERBASE_PLAIN` | bridge | none | Set to `1` for plain `[superbase]` log lines without the styled screen. |
 
 To change the port, set `SUPERBASE_PORT` when you start the bridge and in the `env` of your MCP config, then use the loader the bridge prints. Example for PowerShell: `$env:SUPERBASE_PORT="9800"; npm start`.
 
@@ -694,7 +807,7 @@ The MCP server and the dashboard use this API, and so can your own tools. In ope
 | `POST /exec` | Run Lua. Body: `{ "code": "return 1", "client": "c1", "timeout_ms": 15000 }`. `client` and `timeout_ms` are optional. |
 | `POST /inspect` | Inspect an instance. Body: `{ "path": "game.Workspace", "properties": ["Name"], "client": "c1" }`. |
 | `POST /clear` | Clear stored logs and errors. Body: `{ "client": "c1" }` clears one client, `{}` clears all. |
-| `GET /screenshot` | Screenshot of the Roblox window as base64 JPEG. Query: `max_width`, `focus=1`. Windows only. |
+| `GET /screenshot` | Screenshot of the Roblox window as base64 JPEG. Query: `max_width`, `focus=1` (allow the fallback to raise Roblox for a moment). Windows only. |
 
 Example:
 
@@ -729,6 +842,7 @@ superbase/
 │   │   └── theme-init.js
 │   ├── selector.js         Parser for the find_instances selector language
 │   ├── screenshot.js       Windows window capture used by the bridge
+│   ├── terminal.js         Colors and title box for the bridge and installer output
 │   └── lua/                Lua snippets behind the higher level tools
 │       ├── game_info.lua
 │       ├── find_instances.lua
@@ -739,6 +853,8 @@ superbase/
 │       ├── remote_spy.lua
 │       ├── gui_interact.lua
 │       └── set_property.lua
+├── scripts/
+│   └── install.js          Registers the MCP server in the AI clients that are installed
 ├── roblox/
 │   └── client.lua          Runs in the executor
 ├── assets/
@@ -754,7 +870,13 @@ superbase/
 │   ├── screenshot.test.js
 │   ├── lua.test.js
 │   ├── lua-runtime.test.js
+│   ├── install.test.js
+│   ├── terminal.test.js
 │   └── lua/                Mock of the Roblox API for the snippet tests
+├── install.ps1             One line installer for Windows
+├── install.sh              One line installer for macOS and Linux
+├── LICENSE
+├── package-lock.json
 ├── package.json
 └── README.md
 ```
@@ -799,7 +921,8 @@ To add a tool that runs Lua in the game, put the code in `src/lua/<name>.lua` (i
 | `gui_interact` cannot click a button | The button may have no connections to fire. Try `"mode": "mouse"`, which needs the button to be visible. |
 | `search_scripts` finds nothing or reports many `unreadable` scripts | The decompiler failed or timed out. Narrow it with `root` or `class_name`, raise `budget_seconds`, or try again later. |
 | `screenshot` says it is only supported on Windows | The bridge runs on another system. Screenshots need Windows. |
-| `screenshot` says no Roblox window was found, or that it is minimized | Start the game, or restore the window. `"focus": true` restores and raises it. |
+| `screenshot` says no Roblox window was found, or that it is minimized | Start the game, or restore the window. The default `"focus": true` restores and raises it. |
+| `screenshot` shows another window or your whole screen instead of Roblox | Another window was in front of Roblox and `PrintWindow` gave no usable picture. Leave `focus` on its default (`true`) so the fallback raises Roblox first. |
 | The dashboard says it cannot reach the bridge | The bridge is not running. Start it with `npm start`. The page reconnects by itself. |
 | The AI client does not list Superbase | Check the path in the config, restart the client and confirm that Node.js 18+ is installed (`node --version`). |
 | Claude Desktop asks for confirmation on every call | The tool permission mode is set to ask. Change it in the tool's permission settings. |
@@ -827,4 +950,13 @@ It works wherever your executor can run scripts. Some games detect or block exec
 **Is it affiliated with Roblox?**
 No. Superbase is an independent project.
 
-[![M8ven Score](https://m8ven.ai/badge/mcp/fiangg20-superbase-1nmxtn?v=66217098fa518e7a66a609905ea7ba9d)](https://m8ven.ai/mcp/fiangg20-superbase-1nmxtn?s=readme)
+## License
+
+Superbase is released under the [MIT License](LICENSE). You may use, copy, modify and distribute it, including in commercial projects, as long as the copyright notice and the license text stay with it. The software comes without any warranty. The fonts in `assets/fonts` are not part of that license, see [Fonts and icons](#fonts-and-icons). You are responsible for where and how you use it, see [Security](#security).
+
+## Credits
+
+- Built by [Bases](https://github.com/fiangg20) ([@fyandevelopers](https://www.roblox.com/users/5349151666/profile))
+- MCP implementation inspired by the [Model Context Protocol](https://modelcontextprotocol.io)
+
+Superbase is an independent project and is not affiliated with Roblox.

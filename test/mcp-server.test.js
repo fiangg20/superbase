@@ -614,7 +614,9 @@ async function main() {
     assert.deepStrictEqual(res.result.content[1], { type: "image", data: "QUJD", mimeType: "image/jpeg" });
     assert.ok(seen.some((url) => url === "/screenshot?max_width=640&focus=1"), seen.join(" "));
     res = await stubbed.call("screenshot", { max_width: 99999 });
-    assert.ok(seen.some((url) => url === "/screenshot?max_width=1920"), "the width is clamped");
+    assert.ok(seen.some((url) => url === "/screenshot?max_width=1920&focus=1"), "the width is clamped and Roblox is raised by default");
+    await stubbed.call("screenshot", { max_width: 800, focus: false });
+    assert.ok(seen.some((url) => url === "/screenshot?max_width=800"), "focus false leaves the windows alone");
     stub.close();
 
     // Token mode: the bridge is protected, so the MCP config must carry the same token.

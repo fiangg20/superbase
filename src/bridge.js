@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 "use strict";
 
 // Superbase bridge.
@@ -20,8 +21,19 @@ const fs = require("fs");
 const http = require("http");
 const path = require("path");
 const crypto = require("crypto");
-const { WebSocketServer } = require("ws");
+const terminal = require("./terminal");
 const { captureRobloxWindow, ScreenshotError } = require("./screenshot");
+
+let WebSocketServer;
+try {
+  ({ WebSocketServer } = require("ws"));
+} catch (error) {
+  if (error.code !== "MODULE_NOT_FOUND") throw error;
+  console.error("[superbase] The dependency 'ws' is not installed yet.");
+  console.error("[superbase] Run this once in the Superbase folder, then start the bridge again:");
+  console.error("[superbase]   npm install");
+  process.exit(1);
+}
 
 const VERSION = "1.3.0";
 const HOST = "127.0.0.1";
@@ -37,6 +49,23 @@ const MAX_BODY_BYTES = 1024 * 1024;
 const PING_INTERVAL_MS = Number(process.env.SUPERBASE_PING_MS || 10000);
 const STALE_AFTER_MS = Number(process.env.SUPERBASE_STALE_MS || 30000);
 const STARTED_AT = Date.now();
+
+// In a terminal the bridge prints a styled startup screen and one line per event, with the time.
+// When the output goes to a file or a pipe, or SUPERBASE_PLAIN is set, it prints the plain lines.
+const FANCY = Boolean(process.stdout.isTTY) && !process.env.SUPERBASE_PLAIN;
+const ui = terminal.makeUi(FANCY && !process.env.NO_COLOR, FANCY && terminal.supportsUnicode(process.platform, process.env));
+
+// kind: ok, warn, fail or info. "debug" lines are only printed in plain mode.
+function note(kind, text) {
+  if (!FANCY) {
+    console.log(`[superbase] ${text}`);
+    return;
+  }
+  if (kind === "debug") return;
+  const time = new Date().toTimeString().slice(0, 8);
+  const symbol = { ok: ui.green(ui.sym.ok), warn: ui.yellow(ui.sym.warn), fail: ui.red(ui.sym.fail) }[kind] || ui.dim(ui.sym.dot);
+  console.log(`  ${ui.dim(time)}  ${symbol} ${text}`);
+}
 
 const CLIENT_SCRIPT_CANDIDATES = [
   path.join(__dirname, "..", "roblox", "client.lua"),
@@ -582,7 +611,7 @@ const wss = new WebSocketServer({
   verifyClient: ({ req }) => {
     const origin = req.headers.origin;
     if (origin && !OWN_ORIGINS.has(origin)) {
-      console.log(`[superbase] rejected connection with Origin header: ${origin}`);
+      note("warn", `rejected connection with Origin header: ${origin}`);
       return false;
     }
     return true;
@@ -591,7 +620,7 @@ const wss = new WebSocketServer({
 
 wss.on("connection", (ws) => {
   ws.authenticated = false;
-  console.log("[superbase] new connection, waiting for hello");
+  note("debug", "new connection, waiting for hello");
 
   const authTimer = setTimeout(() => {
     if (!ws.authenticated) {
@@ -635,16 +664,14 @@ wss.on("connection", (ws) => {
         clients.set(ws.id, ws);
 
         ws.send(JSON.stringify({ type: "welcome", clientId: ws.id }));
-        console.log(
-          `[superbase] executor connected as ${ws.id} (placeId=${ws.meta.placeId}, executor=${ws.executor || "unknown"}, user=${ws.userName || "unknown"})`,
-        );
+        note("ok", `executor connected as ${ws.id} (placeId=${ws.meta.placeId}, executor=${ws.executor || "unknown"}, user=${ws.userName || "unknown"})`);
 
         // Measure the first round trip shortly after the client finished sending its history.
         setTimeout(() => {
           if (isLive(ws)) probe(ws).catch(() => {});
         }, 1000);
       } else {
-        console.log("[superbase] rejected hello (wrong token or malformed message)");
+        note("warn", "rejected hello (wrong token or malformed message)");
         ws.close(1008, "Unauthorized");
       }
       return;
@@ -664,7 +691,7 @@ wss.on("connection", (ws) => {
       clients.delete(ws.id);
       lastDisconnectAt = Date.now();
       rejectAllPending(ws, "Executor disconnected");
-      console.log(`[superbase] executor ${ws.id} disconnected`);
+      note("info", `executor ${ws.id} disconnected`);
     }
   });
 
@@ -678,7 +705,7 @@ const heartbeat = setInterval(() => {
 
   for (const ws of liveClients()) {
     if (now - ws.lastSeen > STALE_AFTER_MS) {
-      console.log(`[superbase] executor ${ws.id} stopped responding, closing the connection`);
+      note("warn", `executor ${ws.id} stopped responding, closing the connection`);
       ws.terminate();
       continue;
     }
@@ -697,18 +724,77 @@ const heartbeat = setInterval(() => {
 }, PING_INTERVAL_MS);
 heartbeat.unref();
 
-server.listen(PORT, HOST, () => {
-  console.log(`[superbase] bridge ${VERSION} listening on ws://${HOST}:${PORT} (HTTP API on the same port)`);
-  console.log(`[superbase] dashboard: http://${HOST}:${PORT}/`);
-  if (OPEN_MODE) {
-    console.log("[superbase] open mode: no token needed. Web pages are blocked, but any program on this computer can use the bridge.");
-    console.log("[superbase] set BRIDGE_TOKEN to require a token instead.");
-    if (CLIENT_URL) {
-      console.log(`[superbase] load the client in your executor with: loadstring(game:HttpGet("${CLIENT_URL}"))()`);
+// A port that is taken is the most common reason the bridge does not start, so it gets a clear message.
+let failedToStart = false;
+function onServerError(error) {
+  if (failedToStart) return;
+  failedToStart = true;
+  const next = PORT + 1;
+  const retry = process.platform === "win32" ? `$env:SUPERBASE_PORT = "${next}"; npm start` : `SUPERBASE_PORT=${next} npm start`;
+  if (error.code === "EADDRINUSE") {
+    if (FANCY) {
+      console.log("");
+      console.log(`  ${ui.red(ui.sym.fail)} ${ui.bold(`Port ${PORT} is already in use`)}`);
+      console.log(`    ${ui.dim("Another Superbase bridge is probably running. Close it, or use another port:")}`);
+      console.log(`      ${ui.cyan(retry)}`);
+      console.log(`    ${ui.dim("The MCP server needs the same port, so set SUPERBASE_PORT there too.")}`);
+      console.log("");
     } else {
-      console.log("[superbase] roblox/client.lua was not found, so /client.lua is not available.");
+      console.error(`[superbase] Port ${PORT} is already in use. Another bridge is probably running. Close it, or start with ${retry}`);
     }
   } else {
-    console.log("[superbase] token mode: every request and the executor handshake must carry the token.");
+    console.error(`[superbase] The bridge could not start: ${error.message}`);
   }
+  process.exit(1);
+}
+server.on("error", onServerError);
+wss.on("error", onServerError);
+
+if (FANCY) {
+  process.on("SIGINT", () => {
+    console.log("");
+    note("info", "Bridge stopped");
+    console.log("");
+    process.exit(0);
+  });
+}
+
+server.listen(PORT, HOST, () => {
+  if (!FANCY) {
+    console.log(`[superbase] bridge ${VERSION} listening on ws://${HOST}:${PORT} (HTTP API on the same port)`);
+    console.log(`[superbase] dashboard: http://${HOST}:${PORT}/`);
+    if (OPEN_MODE) {
+      console.log("[superbase] open mode: no token needed. Web pages are blocked, but any program on this computer can use the bridge.");
+      console.log("[superbase] set BRIDGE_TOKEN to require a token instead.");
+      if (CLIENT_URL) {
+        console.log(`[superbase] load the client in your executor with: loadstring(game:HttpGet("${CLIENT_URL}"))()`);
+      } else {
+        console.log("[superbase] roblox/client.lua was not found, so /client.lua is not available.");
+      }
+    } else {
+      console.log("[superbase] token mode: every request and the executor handshake must carry the token.");
+    }
+    return;
+  }
+
+  const row = (label, value) => console.log(`  ${ui.green(ui.sym.live)} ${ui.bold(label.padEnd(12))}${value}`);
+  terminal.banner(ui, `Superbase Bridge ${VERSION}`, "Roblox executor and AI, connected", (line) => console.log(line));
+  row("Running", `ws://${HOST}:${PORT}`);
+  row("Dashboard", ui.cyan(`http://${HOST}:${PORT}/`));
+  if (OPEN_MODE) {
+    row("Mode", `open ${ui.dim("(no token, web pages are blocked)")}`);
+  } else {
+    row("Mode", `token ${ui.dim("(every request must carry the token)")}`);
+  }
+  console.log("");
+  if (OPEN_MODE && CLIENT_URL) {
+    console.log(`  ${ui.bold("Load this in your executor")}`);
+    console.log(`    ${ui.cyan(`loadstring(game:HttpGet("${CLIENT_URL}"))()`)}`);
+    console.log("");
+  } else if (OPEN_MODE) {
+    console.log(`  ${ui.yellow(ui.sym.warn)} roblox/client.lua was not found, so /client.lua is not available.`);
+    console.log("");
+  }
+  console.log(`  ${ui.dim(`Waiting for a Roblox client. Press Ctrl+C to stop.`)}`);
+  console.log("");
 });

@@ -36,6 +36,7 @@ try {
       @('IsIconic', [bool], [Type[]]@([IntPtr])),
       @('ShowWindow', [bool], [Type[]]@([IntPtr], [int])),
       @('SetForegroundWindow', [bool], [Type[]]@([IntPtr])),
+      @('GetForegroundWindow', [IntPtr], [Type[]]@()),
       @('SetProcessDPIAware', [bool], [Type[]]@())
     )
     foreach ($entry in $methods) {
@@ -46,6 +47,27 @@ try {
     # A call with a null window proves that the declarations work.
     $type::IsIconic([IntPtr]::Zero) | Out-Null
     return $type
+  }
+
+  # Optional helpers in a type of their own, so that a problem here can never break the capture itself:
+  # PrintWindow (the window draws itself), a short Alt key press (Windows only lets a program raise a
+  # window right after input) and the real window bounds without the invisible resize border.
+  function New-NativeTypeExtra {
+    $assembly = [AppDomain]::CurrentDomain.DefineDynamicAssembly((New-Object System.Reflection.AssemblyName 'SuperbaseNativeExtra'), [System.Reflection.Emit.AssemblyBuilderAccess]::Run)
+    $module = $assembly.DefineDynamicModule('SuperbaseNativeExtra')
+    $builder = $module.DefineType('SuperbaseWinExtra', [System.Reflection.TypeAttributes]'Public, Class')
+    $methods = @(
+      @('keybd_event', 'user32.dll', [void], [Type[]]@([byte], [byte], [uint32], [UIntPtr])),
+      @('PrintWindow', 'user32.dll', [bool], [Type[]]@([IntPtr], [IntPtr], [uint32])),
+      @('GetClientRect', 'user32.dll', [bool], [Type[]]@([IntPtr], [IntPtr])),
+      @('ClientToScreen', 'user32.dll', [bool], [Type[]]@([IntPtr], [IntPtr])),
+      @('DwmGetWindowAttribute', 'dwmapi.dll', [int], [Type[]]@([IntPtr], [int], [IntPtr], [int]))
+    )
+    foreach ($entry in $methods) {
+      $method = $builder.DefinePInvokeMethod($entry[0], $entry[1], [System.Reflection.MethodAttributes]'Public, Static, PinvokeImpl', [System.Reflection.CallingConventions]::Standard, $entry[2], $entry[3], [System.Runtime.InteropServices.CallingConvention]::Winapi, [System.Runtime.InteropServices.CharSet]::Auto)
+      $method.SetImplementationFlags([System.Reflection.MethodImplAttributes]'PreserveSig')
+    }
+    return $builder.CreateType()
   }
 
   # Fallback when the first way is not available on this computer.
@@ -72,6 +94,8 @@ public static class SuperbaseWinCompiled {
     $native = New-NativeTypeCompiled
   }
   $native::SetProcessDPIAware() | Out-Null
+  $extra = $null
+  try { $extra = New-NativeTypeExtra } catch { $extra = $null }
   $timings['native'] = $clock.ElapsedMilliseconds
 
   $candidates = @(Get-Process -Name RobloxPlayerBeta -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero })
@@ -96,11 +120,6 @@ public static class SuperbaseWinCompiled {
     $native::ShowWindow($handle, 9) | Out-Null
     Start-Sleep -Milliseconds 400
   }
-  if ($focus) {
-    $native::SetForegroundWindow($handle) | Out-Null
-    Start-Sleep -Milliseconds 350
-  }
-
   $buffer = [System.Runtime.InteropServices.Marshal]::AllocHGlobal(16)
   try {
     $found = $native::GetWindowRect($handle, $buffer)
@@ -111,17 +130,133 @@ public static class SuperbaseWinCompiled {
   } finally {
     [System.Runtime.InteropServices.Marshal]::FreeHGlobal($buffer)
   }
-  $width = $right - $left
-  $height = $bottom - $top
-  if (-not $found -or $width -le 0 -or $height -le 0 -or $width -gt 16384 -or $height -gt 16384) {
-    Write-Output '{"error":"empty"}'
-    exit 0
-  }
 
-  $bitmap = New-Object System.Drawing.Bitmap($width, $height)
-  $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-  $graphics.CopyFromScreen($left, $top, 0, 0, $bitmap.Size)
-  $graphics.Dispose()
+  # Way 1: ask Windows to draw the Roblox window itself (PrintWindow). Another window in front of it cannot
+  # end up in the picture, and nothing has to be raised. Only the game area is kept, without the title bar.
+  # A result that is empty or black is thrown away and way 2 takes over.
+  $bitmap = $null
+  $method = 'screen'
+  if ($found -and $null -ne $extra) {
+    try {
+      $winW = $right - $left
+      $winH = $bottom - $top
+      if ($winW -gt 0 -and $winH -gt 0 -and $winW -le 16384 -and $winH -le 16384) {
+        $full = New-Object System.Drawing.Bitmap($winW, $winH)
+        $fullGraphics = [System.Drawing.Graphics]::FromImage($full)
+        $hdc = $fullGraphics.GetHdc()
+        try { $printed = $extra::PrintWindow($handle, $hdc, 2) } finally { $fullGraphics.ReleaseHdc($hdc); $fullGraphics.Dispose() }
+
+        $candidate = $full
+        $clientBuffer = [System.Runtime.InteropServices.Marshal]::AllocHGlobal(16)
+        $pointBuffer = [System.Runtime.InteropServices.Marshal]::AllocHGlobal(8)
+        try {
+          [System.Runtime.InteropServices.Marshal]::WriteInt32($pointBuffer, 0, 0)
+          [System.Runtime.InteropServices.Marshal]::WriteInt32($pointBuffer, 4, 0)
+          if ($extra::GetClientRect($handle, $clientBuffer) -and $extra::ClientToScreen($handle, $pointBuffer)) {
+            $cw = [System.Runtime.InteropServices.Marshal]::ReadInt32($clientBuffer, 8)
+            $ch = [System.Runtime.InteropServices.Marshal]::ReadInt32($clientBuffer, 12)
+            $ox = [System.Runtime.InteropServices.Marshal]::ReadInt32($pointBuffer, 0) - $left
+            $oy = [System.Runtime.InteropServices.Marshal]::ReadInt32($pointBuffer, 4) - $top
+            if ($cw -gt 0 -and $ch -gt 0 -and $ox -ge 0 -and $oy -ge 0 -and ($ox + $cw) -le $winW -and ($oy + $ch) -le $winH) {
+              $candidate = $full.Clone((New-Object System.Drawing.Rectangle($ox, $oy, $cw, $ch)), $full.PixelFormat)
+            }
+          }
+        } finally {
+          [System.Runtime.InteropServices.Marshal]::FreeHGlobal($clientBuffer)
+          [System.Runtime.InteropServices.Marshal]::FreeHGlobal($pointBuffer)
+        }
+
+        # A picture with almost no different colors, or no light at all, is not a real frame.
+        $seen = @{}
+        $sum = 0
+        $count = 0
+        $stepX = [Math]::Max([int]($candidate.Width / 40), 1)
+        $stepY = [Math]::Max([int]($candidate.Height / 25), 1)
+        for ($sx = 2; $sx -lt $candidate.Width; $sx += $stepX) {
+          for ($sy = 2; $sy -lt $candidate.Height; $sy += $stepY) {
+            $pixel = $candidate.GetPixel($sx, $sy)
+            $seen[('' + $pixel.R + ',' + $pixel.G + ',' + $pixel.B)] = 1
+            $sum += ($pixel.R + $pixel.G + $pixel.B) / 3
+            $count += 1
+          }
+        }
+        if ($printed -and $count -gt 0 -and $seen.Count -ge 6 -and ($sum / $count) -ge 3) {
+          $bitmap = $candidate
+          $method = 'printwindow'
+        }
+      }
+    } catch {
+      $bitmap = $null
+    }
+  }
+  $timings['print'] = $clock.ElapsedMilliseconds
+
+  # Way 2: copy the pixels of the screen area of the window. A window in front of Roblox would end up in the
+  # picture, so with focus Roblox is raised first and the window that was in front is put back afterwards.
+  if ($null -eq $bitmap) {
+    $previous = [IntPtr]::Zero
+    if ($focus) {
+      $previous = $native::GetForegroundWindow()
+      if ($previous.ToInt64() -ne $handle.ToInt64()) {
+        if ($null -ne $extra) {
+          try {
+            $extra::keybd_event(0x12, 0, 0, [UIntPtr]::Zero)
+            $extra::keybd_event(0x12, 0, 2, [UIntPtr]::Zero)
+          } catch { }
+        }
+        $native::SetForegroundWindow($handle) | Out-Null
+        Start-Sleep -Milliseconds 450
+      }
+    }
+    $timings['focus'] = $clock.ElapsedMilliseconds
+
+    # The window can have moved while it was raised.
+    $buffer = [System.Runtime.InteropServices.Marshal]::AllocHGlobal(16)
+    try {
+      $found = $native::GetWindowRect($handle, $buffer)
+      $left = [System.Runtime.InteropServices.Marshal]::ReadInt32($buffer, 0)
+      $top = [System.Runtime.InteropServices.Marshal]::ReadInt32($buffer, 4)
+      $right = [System.Runtime.InteropServices.Marshal]::ReadInt32($buffer, 8)
+      $bottom = [System.Runtime.InteropServices.Marshal]::ReadInt32($buffer, 12)
+    } finally {
+      [System.Runtime.InteropServices.Marshal]::FreeHGlobal($buffer)
+    }
+    # The visible bounds of the window, without the invisible resize border of Windows 10 and 11.
+    if ($found -and $null -ne $extra) {
+      $frame = [System.Runtime.InteropServices.Marshal]::AllocHGlobal(16)
+      try {
+        if ($extra::DwmGetWindowAttribute($handle, 9, $frame, 16) -eq 0) {
+          $fl = [System.Runtime.InteropServices.Marshal]::ReadInt32($frame, 0)
+          $ft = [System.Runtime.InteropServices.Marshal]::ReadInt32($frame, 4)
+          $fr = [System.Runtime.InteropServices.Marshal]::ReadInt32($frame, 8)
+          $fb = [System.Runtime.InteropServices.Marshal]::ReadInt32($frame, 12)
+          if ($fr -gt $fl -and $fb -gt $ft -and $fl -ge $left -and $ft -ge $top -and $fr -le $right -and $fb -le $bottom) {
+            $left = $fl; $top = $ft; $right = $fr; $bottom = $fb
+          }
+        }
+      } catch { } finally {
+        [System.Runtime.InteropServices.Marshal]::FreeHGlobal($frame)
+      }
+    }
+    $width = $right - $left
+    $height = $bottom - $top
+    if (-not $found -or $width -le 0 -or $height -le 0 -or $width -gt 16384 -or $height -gt 16384) {
+      Write-Output '{"error":"empty"}'
+      exit 0
+    }
+
+    $bitmap = New-Object System.Drawing.Bitmap($width, $height)
+    $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+    $graphics.CopyFromScreen($left, $top, 0, 0, $bitmap.Size)
+    $graphics.Dispose()
+
+    # Give the screen back to the window the person was using.
+    if ($focus -and $previous.ToInt64() -ne 0 -and $previous.ToInt64() -ne $handle.ToInt64()) {
+      try { $native::SetForegroundWindow($previous) | Out-Null } catch { }
+    }
+  }
+  $width = $bitmap.Width
+  $height = $bitmap.Height
   $timings['capture'] = $clock.ElapsedMilliseconds
 
   $maxWidth = [int]$env:SB_MAX_WIDTH
@@ -150,7 +285,7 @@ public static class SuperbaseWinCompiled {
   # The base64 text is built by hand, because ConvertTo-Json is slow on large strings.
   $titleJson = ConvertTo-Json -InputObject ([string]$proc.MainWindowTitle) -Compress
   $timingsJson = $timings | ConvertTo-Json -Compress
-  Write-Output ('{"ok":true,"mimeType":"image/jpeg","width":' + $output.Width + ',"height":' + $output.Height + ',"title":' + $titleJson + ',"native":"' + $nativeKind + '","timings":' + $timingsJson + ',"data":"' + $encoded + '"}')
+  Write-Output ('{"ok":true,"mimeType":"image/jpeg","width":' + $output.Width + ',"height":' + $output.Height + ',"title":' + $titleJson + ',"native":"' + $nativeKind + '","method":"' + $method + '","timings":' + $timingsJson + ',"data":"' + $encoded + '"}')
 } catch {
   $message = $_.Exception.Message -replace '[\\r\\n"\\\\]', ' '
   Write-Output ('{"error":"failed","detail":"' + $message + '"}')
@@ -244,6 +379,7 @@ async function captureRobloxWindow({
     height: result.height,
     title: result.title || null,
     ...(result.timings ? { timings: result.timings, native: result.native } : {}),
+    ...(result.method ? { method: result.method } : {}),
   };
 }
 
