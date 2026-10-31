@@ -4,6 +4,10 @@
 // The bridge exposes this as GET /screenshot. Nothing from the request is placed in the script:
 // the width and the focus flag travel through environment variables.
 
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+const crypto = require("crypto");
 const { spawn } = require("child_process");
 
 const DEFAULT_MAX_WIDTH = 1280;
@@ -292,12 +296,29 @@ public static class SuperbaseWinCompiled {
 }
 `;
 
+// The script goes in a temporary file and runs with -File. Windows refuses a command line longer than about
+// 32,000 characters, and -EncodedCommand makes the script 2.7 times longer than it is.
 function runPowerShell(script, env, timeoutMs) {
   return new Promise((resolve, reject) => {
-    const encoded = Buffer.from(script, "utf16le").toString("base64");
+    const file = path.join(os.tmpdir(), `superbase-shot-${process.pid}-${crypto.randomBytes(6).toString("hex")}.ps1`);
+    try {
+      // The byte order mark lets Windows PowerShell 5.1 read the file as UTF-8.
+      fs.writeFileSync(file, `\ufeff${script}`, { encoding: "utf8", mode: 0o600 });
+    } catch (error) {
+      reject(new ScreenshotError(500, `Could not write the temporary script: ${error.message}`));
+      return;
+    }
+    const cleanup = () => {
+      try {
+        fs.unlinkSync(file);
+      } catch {
+        // Already gone, or still locked. The system temp folder is cleaned up by Windows.
+      }
+    };
+
     const child = spawn(
       "powershell.exe",
-      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded],
+      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", file],
       { env: { ...process.env, ...env }, windowsHide: true },
     );
 
@@ -305,6 +326,7 @@ function runPowerShell(script, env, timeoutMs) {
     let stderr = "";
     const timer = setTimeout(() => {
       child.kill();
+      cleanup();
       reject(new ScreenshotError(504, "The screenshot took too long."));
     }, timeoutMs);
 
@@ -312,10 +334,12 @@ function runPowerShell(script, env, timeoutMs) {
     child.stderr.on("data", (chunk) => (stderr += chunk));
     child.on("error", (error) => {
       clearTimeout(timer);
+      cleanup();
       reject(new ScreenshotError(500, `Could not start PowerShell: ${error.message}`));
     });
     child.on("close", () => {
       clearTimeout(timer);
+      cleanup();
       resolve({ stdout, stderr });
     });
   });
