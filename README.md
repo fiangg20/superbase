@@ -94,7 +94,7 @@ Because the bridge stores logs, the AI can still read what happened after you le
 ```bash
 git clone https://github.com/fiangg20/superbase.git
 cd superbase
-npm install
+npm run setup
 npm start
 ```
 
