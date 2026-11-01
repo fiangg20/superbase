@@ -10,13 +10,19 @@ const fs = require("fs");
 const path = require("path");
 const readline = require("readline");
 const { parseSelector, SelectorError } = require("./selector");
+const { loadSettings } = require("./config");
+const background = require("./background");
+const recipeStore = require("./recipes");
 
-const VERSION = "1.3.0";
-const PORT = Number(process.env.SUPERBASE_PORT || process.env.BRIDGE_PORT || 9731);
-const TOKEN = process.env.SUPERBASE_TOKEN || process.env.BRIDGE_TOKEN || "";
+const VERSION = "1.3.1";
+const SETTINGS = loadSettings(process.env);
+const PORT = SETTINGS.port;
+const TOKEN = SETTINGS.token;
 const BASE_URL = `http://127.0.0.1:${PORT}`;
 // Set this to a public raw URL of roblox/client.lua if you host it somewhere (for example GitHub).
-const CLIENT_URL_OVERRIDE = process.env.SUPERBASE_CLIENT_URL || "";
+const CLIENT_URL_OVERRIDE = SETTINGS.clientUrl || "";
+const RECIPES_DIR = recipeStore.recipesDir(SETTINGS);
+for (const warning of SETTINGS.warnings) process.stderr.write(`[superbase] ${warning}\n`);
 const LUA_DIR = path.join(__dirname, "lua");
 const REQUEST_TIMEOUT_MS = 25000;
 const STATUS_TIMEOUT_MS = 6000;
@@ -32,7 +38,9 @@ const INSTRUCTIONS = [
   "Connection awareness:",
   "- Call roblox_status first in every session, and again whenever a tool fails. It actively pings the Roblox client.",
   "- Every tool result begins with a [Superbase] status line that shows the current connection state.",
-  "- States: connected (all tools work); waiting_for_roblox (the bridge runs but no game is connected); unresponsive (a client is connected but does not answer: the game may be frozen, loading or closing); unknown_client (the client id you passed is not connected); bridge_offline (the bridge is not running: ask the user to start it with npm start); token_mismatch (the bridge and this MCP config disagree about the token).",
+  "- States: connected (all tools work); waiting_for_roblox (the bridge runs but no game is connected); unresponsive (a client is connected but does not answer: the game may be frozen, loading or closing); unknown_client (the client id you passed is not connected); bridge_offline (the bridge is not running and could not be started automatically: the hint says why); token_mismatch (the bridge and this MCP config disagree about the token).",
+  "- The bridge starts by itself when a tool needs it, so the user does not have to run npm start. A note in the status line says when that happened.",
+  "- After a teleport the Roblox client reconnects by itself within a few seconds (when auto reconnect is on). If the state is waiting_for_roblox right after a teleport, call roblox_status again before asking the user to do anything.",
   "- When the state is waiting_for_roblox, the status line contains a one-line loadstring script. Show it to the user in a code block so they can run it in their executor, then wait for them.",
   "- When the state is not connected, do not retry in a loop. Tell the user what is missing and wait for them.",
   "",
@@ -45,13 +53,16 @@ const INSTRUCTIONS = [
   "- Scripts: list_scripts lists them, get_script_source reads one, search_scripts greps through all sources (text, Lua pattern or words mode).",
   "- remote_spy records RemoteEvent and RemoteFunction calls: start it, let the user (or gui_interact) trigger the action, read the calls with get, then stop it.",
   "- gui_interact lists buttons and text boxes, clicks buttons, types into text boxes and triggers click detectors and proximity prompts. screenshot shows what the Roblox window looks like (Windows only).",
+  "- player_info lists the players with position, distance, health and items. character_control teleports the local character or walks it to a position, a player or an instance.",
+  "- stats measures FPS (average, minimum, 1% low), stutters, memory, ping and world size, with short notes on what looks wrong. snapshot saves the state of part of the tree and later reports what was added, removed or changed, which is the way to see the effect of an action.",
+  "- recipes lists, runs and saves reusable Lua scripts (a folder of .lua files with a header). Check the list before you write a script for a common task, and save a script as a recipe when the user will want it again.",
   "- To check the effect of an action, use execute_lua with capture_logs, or wait_for_log to wait for a specific console line.",
   "- Logs and errors are stored by the bridge, so get_logs and get_errors still work while waiting_for_roblox.",
   "",
   "Selector syntax for find_instances: Type, #Name, [property=value], descendants separated by a space, direct children with >. Examples: RemoteEvent, Model > Part, Part[Anchored=false], TextButton#Play, Frame TextLabel[Text*='coins']. Operators: = != *= (contains) ^= (starts with) $= (ends with) < <= > >=.",
   "",
   "Safety:",
-  "- execute_lua, set_property, gui_interact (click, set_text, trigger) and remote_spy change or observe the running game with the executor's full permissions. Only do what the user asked for, and explain anything that changes the game or the user's files before you do it.",
+  "- execute_lua, set_property, gui_interact (click, set_text, trigger) and remote_spy change or observe the running game with the executor's full permissions. Only do what the user asked for, and explain anything that changes the game or the user's files before you do it. character_control moves the player and recipes (save) writes a file in the recipes folder, so treat them the same way.",
   "- Instance paths are dotted and start at game. Instance names that contain a dot cannot be addressed.",
 ].join("\n");
 
@@ -75,15 +86,24 @@ function describeClientList(status) {
   return list.map((client) => `${client.id}${client.userName ? ` (${client.userName})` : ""}`).join(", ");
 }
 
-function hintFor(state, status) {
+function hintFor(state, status, autostartError) {
   switch (state) {
     case "bridge_offline":
+      if (autostartError) {
+        return `The Superbase bridge is not running on ${BASE_URL} and could not be started automatically: ${autostartError} Ask the user to run npm start in the Superbase folder and tell you what it prints.`;
+      }
+      if (!SETTINGS.autostart) {
+        return `The Superbase bridge is not running on ${BASE_URL}, and automatic start is turned off. Ask the user to start it (npm start, or npm run start:bg, in the Superbase folder).`;
+      }
       return `The Superbase bridge is not running on ${BASE_URL}. Ask the user to start it (npm start in the Superbase folder).`;
     case "token_mismatch":
       return TOKEN
         ? "The bridge rejected this server's token. BRIDGE_TOKEN in the MCP config must match the token the bridge was started with."
         : "The bridge requires a token. Set BRIDGE_TOKEN in the MCP config to the token the bridge was started with, or restart the bridge without a token.";
     case "waiting_for_roblox": {
+      if (status && status.lastDisconnectReason === "teleport" && typeof status.lastDisconnectedSecAgo === "number" && status.lastDisconnectedSecAgo < 120) {
+        return "The game is teleporting. The Roblox client reconnects by itself when the new place has loaded, so call roblox_status again in a few seconds. Only ask the user to run the loader again if it stays disconnected for a minute or more.";
+      }
       const loader = loaderFor(status);
       return loader
         ? `The bridge is running but no Roblox client is connected. Ask the user to join a game and run this in their executor: ${loader}`
@@ -133,9 +153,38 @@ async function bridgeRequest(method, urlPath, body, timeoutMs = REQUEST_TIMEOUT_
   return data;
 }
 
+// Starts the bridge in the background when it is not running. One attempt at a time, and a failed
+// attempt is not repeated for 30 seconds, so a broken setup does not slow down every tool call.
+const autostart = { promise: null, at: 0, result: null, notice: null };
+
+async function autostartBridge() {
+  if (!SETTINGS.autostart) return null;
+  if (autostart.promise) return autostart.promise;
+  const age = Date.now() - autostart.at;
+  if (autostart.result && !autostart.result.ok && age < 30000) return autostart.result;
+  if (autostart.result && autostart.result.ok && age < 3000) return autostart.result;
+
+  autostart.at = Date.now();
+  autostart.promise = background
+    .startBridge({ settings: SETTINGS, env: process.env })
+    .catch((error) => ({ ok: false, started: false, error: error.message }))
+    .then((result) => {
+      autostart.result = result;
+      autostart.at = Date.now();
+      if (result.ok && result.started) {
+        autostart.notice = `[Superbase] The bridge was not running, so it was started in the background${result.pid ? ` (pid ${result.pid})` : ""}. Log: ${background.locations(process.env).log}`;
+      }
+      return result;
+    })
+    .finally(() => {
+      autostart.promise = null;
+    });
+  return autostart.promise;
+}
+
 // Works out what the AI can do right now. With probe, the bridge pings the Roblox client.
 // With a client id, the answer is about that client.
-async function assessConnection(probe, client) {
+async function assessConnection(probe, client, afterAutostart = false) {
   try {
     const query = new URLSearchParams();
     if (probe) query.set("probe", "1");
@@ -160,7 +209,13 @@ async function assessConnection(probe, client) {
     return connection;
   } catch (error) {
     const state = error.kind === "bridge_offline" || error.kind === "token_mismatch" ? error.kind : "bridge_error";
-    return { state, ready: false, hint: hintFor(state) || error.message };
+    let autostartError;
+    if (state === "bridge_offline" && !afterAutostart) {
+      const started = await autostartBridge();
+      if (started && started.ok) return assessConnection(probe, client, true);
+      if (started) autostartError = started.error;
+    }
+    return { state, ready: false, hint: hintFor(state, null, autostartError) || error.message };
   }
 }
 
@@ -212,8 +267,13 @@ function loadSnippet(name) {
 // Runs a Lua file from src/lua in the executor. The arguments arrive as a table named args.
 // A snippet reports a problem by returning { error = "..." }, which becomes a tool error.
 // With timeoutMs the call may take longer than the default 15 seconds.
-async function runSnippet(name, args, { client, timeoutMs } = {}) {
-  const code = `local args = game:GetService("HttpService"):JSONDecode(${luaString(JSON.stringify(args))})\n${loadSnippet(name)}`;
+async function runSnippet(name, args, options = {}) {
+  return runLua(loadSnippet(name), args, options);
+}
+
+// Runs Lua source with the arguments available as a table named args.
+async function runLua(source, args, { client, timeoutMs } = {}) {
+  const code = `local args = game:GetService("HttpService"):JSONDecode(${luaString(JSON.stringify(args))})\n${source}`;
   const result = await execOnClient(code, { client, timeoutMs });
 
   if (result.ok && Array.isArray(result.value) && result.value.length > 0) {
@@ -766,19 +826,20 @@ const tools = [
     inputSchema: {
       type: "object",
       properties: {
-        max_width: { type: "integer", minimum: 320, maximum: 1920, description: "Scale the image down to this width (default 1280)." },
-        focus: { type: "boolean", description: "Allow the fallback to raise the Roblox window for a moment and put the previous window back (default true). Set false to never touch the windows." },
+        max_width: { type: "integer", minimum: 320, maximum: 1920, description: "Scale the image down to this width (default 1280, or screenshotMaxWidth from the config)." },
+        focus: { type: "boolean", description: "Allow the fallback to raise the Roblox window for a moment and put the previous window back (default true, or screenshotFocus from the config). Set false to never touch the windows." },
       },
       additionalProperties: false,
     },
     annotations: READ_ONLY,
     run: async (args) => {
       const query = new URLSearchParams();
-      if (args.max_width !== undefined) query.set("max_width", String(clampInt(args.max_width, 320, 1920, 1280)));
-      if (args.focus !== false) query.set("focus", "1");
+      query.set("max_width", String(clampInt(args.max_width, 320, 1920, SETTINGS.screenshotMaxWidth)));
+      const focus = typeof args.focus === "boolean" ? args.focus : SETTINGS.screenshotFocus;
+      if (focus) query.set("focus", "1");
       const suffix = query.toString();
       const shot = await bridgeRequest("GET", `/screenshot${suffix ? `?${suffix}` : ""}`, undefined, SCREENSHOT_TIMEOUT_MS);
-      return { image: { data: shot.data, mimeType: shot.mimeType }, width: shot.width, height: shot.height, title: shot.title };
+      return { image: { data: shot.data, mimeType: shot.mimeType }, width: shot.width, height: shot.height, title: shot.title, ...(shot.method ? { method: shot.method } : {}) };
     },
   },
   {
@@ -815,6 +876,183 @@ const tools = [
         throw new Error("'value_json' cannot be null. Use execute_lua to set a property to nil.");
       }
       return runSnippet("set_property", { path: args.path, property: args.property, value }, ctx);
+    },
+  },
+  {
+    name: "player_info",
+    title: "Players and characters",
+    description:
+      "Look at the players in the server. action list (default) returns every player with team, character position, distance to the local player and health; details true adds walk speed, jump, state, equipped tools, backpack, leaderstats and attributes. action character returns all of that for one player (player: name, display name or user id; default the local player). Requires the connected state.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["list", "character"], description: "list (default) or character." },
+        player: { type: "string", description: "character: name, display name or user id (a part of the name is enough). Default: the local player." },
+        details: { type: "boolean", description: "list: include speed, tools, leaderstats and attributes (default false)." },
+        limit: { type: "integer", minimum: 1, maximum: 100, description: "list: maximum number of players (default 50)." },
+        client: CLIENT_PROPERTY,
+      },
+      additionalProperties: false,
+    },
+    annotations: READ_ONLY,
+    needsRoblox: true,
+    run: (args, ctx) => {
+      const action = args.action === undefined ? "list" : args.action;
+      if (action !== "list" && action !== "character") throw new Error("'action' must be list or character.");
+      return runSnippet(
+        "player_info",
+        {
+          action,
+          player: args.player === undefined || args.player === null ? "" : String(args.player),
+          details: args.details === true,
+          limit: clampInt(args.limit, 1, 100, 50),
+        },
+        ctx,
+      );
+    },
+  },
+  {
+    name: "character_control",
+    title: "Move the local character",
+    description:
+      "Move the local player's character. action teleport puts it at the target at once; action walk_to makes it walk there with the humanoid (it stops when it arrives, gets stuck or the timeout passes). The target is one of: position ({x,y,z}), player (another player's name, display name or user id) or path (a dotted path to a part or model). Near a player or instance the character lands offset_y studs above it (default 3). Teleporting can trigger anti-cheat in some games, so only do it when the user asked. Requires the connected state.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["teleport", "walk_to"], description: "teleport or walk_to." },
+        position: {
+          type: "object",
+          properties: { x: { type: "number" }, y: { type: "number" }, z: { type: "number" } },
+          required: ["x", "y", "z"],
+          additionalProperties: false,
+          description: "World position to go to.",
+        },
+        player: { type: "string", description: "Go to this other player." },
+        path: { type: "string", description: "Go to this part or model (dotted path starting at game)." },
+        offset_y: { type: "number", description: "Studs above the player or instance (default 3)." },
+        timeout: { type: "number", minimum: 1, maximum: 30, description: "walk_to: seconds to wait for the character to arrive (default 10)." },
+        client: CLIENT_PROPERTY,
+      },
+      required: ["action"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    needsRoblox: true,
+    run: (args, ctx) => {
+      if (args.action !== "teleport" && args.action !== "walk_to") throw new Error("'action' must be teleport or walk_to.");
+      const timeout = clampInt(args.timeout, 1, 30, 10);
+      const snippetArgs = { action: args.action, timeout };
+      if (args.position && typeof args.position === "object") snippetArgs.position = args.position;
+      if (typeof args.player === "string" && args.player !== "") snippetArgs.player = args.player;
+      if (typeof args.path === "string" && args.path !== "") snippetArgs.path = args.path;
+      if (args.offset_y !== undefined) snippetArgs.offset_y = Number(args.offset_y);
+      return runSnippet("character_control", snippetArgs, { ...ctx, timeoutMs: args.action === "walk_to" ? (timeout + 5) * 1000 : undefined });
+    },
+  },
+  {
+    name: "stats",
+    title: "Performance stats",
+    description:
+      "Measure how the game performs right now: it samples the frames for a moment (average FPS, minimum FPS, the 1% low, frame time, stutters longer than 50 ms), and reports physics FPS, memory, ping, network traffic, instance and part counts, plus short notes that say what looks wrong. memory detail adds the memory per category. The game window must be visible, because Roblox does not render frames for a minimized window. Requires the connected state.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        sample_seconds: { type: "number", minimum: 0.5, maximum: 5, description: "How long to measure frames (default 1.5)." },
+        memory: { type: "string", enum: ["summary", "detail"], description: "detail adds the memory per category (default summary)." },
+        client: CLIENT_PROPERTY,
+      },
+      additionalProperties: false,
+    },
+    annotations: READ_ONLY,
+    needsRoblox: true,
+    run: (args, ctx) => {
+      const seconds = Math.min(5, Math.max(0.5, Number.isFinite(Number(args.sample_seconds)) ? Number(args.sample_seconds) : 1.5));
+      const memory = args.memory === "detail" ? "detail" : "summary";
+      return runSnippet("stats", { sample_seconds: seconds, memory }, { ...ctx, timeoutMs: Math.round(seconds * 1000) + 10000 });
+    },
+  },
+  {
+    name: "snapshot",
+    title: "Snapshot and diff",
+    description:
+      "Save the state of part of the game and later see exactly what changed. action take records the instances under a path (names, classes and the properties that matter for each class, or the ones you list) in a named slot; action diff compares the slot with the game as it is now and lists what was added, removed and changed (property, before, after); action list shows the slots; action delete removes one. Use it around an action: take, let the user do something or trigger it with gui_interact, then diff. Snapshots live in the executor's memory, at most 10 slots, and are gone when the game is left. Requires the connected state.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["take", "diff", "list", "delete"], description: "take (default), diff, list or delete." },
+        name: { type: "string", description: "Slot name (default 'default')." },
+        path: { type: "string", description: "take: dotted path of the root (default game.Workspace)." },
+        depth: { type: "integer", minimum: 1, maximum: 10, description: "take: how many levels below the root to record (default 4)." },
+        properties: { type: "array", items: { type: "string" }, description: "take: property names to record for every instance. Default: a sensible set for each class (Position, Size, Anchored, Text, Value, Health and so on)." },
+        max_instances: { type: "integer", minimum: 1, maximum: 5000, description: "take: stop after this many instances (default 1500)." },
+        keep: { type: "boolean", description: "diff: replace the saved slot with the current state afterwards, so the next diff starts from here." },
+        limit: { type: "integer", minimum: 1, maximum: 200, description: "diff: entries per list (default 50)." },
+        client: CLIENT_PROPERTY,
+      },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    needsRoblox: true,
+    run: (args, ctx) => {
+      const action = args.action === undefined ? "take" : args.action;
+      if (!["take", "diff", "list", "delete"].includes(action)) throw new Error("'action' must be take, diff, list or delete.");
+      const snippetArgs = { action, limit: clampInt(args.limit, 1, 200, 50), keep: args.keep === true };
+      if (typeof args.name === "string" && args.name !== "") snippetArgs.name = args.name;
+      if (typeof args.path === "string" && args.path !== "") snippetArgs.path = args.path;
+      if (args.depth !== undefined) snippetArgs.depth = clampInt(args.depth, 1, 10, 4);
+      if (Array.isArray(args.properties)) snippetArgs.properties = args.properties.filter((item) => typeof item === "string" && item !== "").slice(0, 40);
+      if (args.max_instances !== undefined) snippetArgs.max_instances = clampInt(args.max_instances, 1, 5000, 1500);
+      return runSnippet("snapshot", snippetArgs, { ...ctx, timeoutMs: 30000 });
+    },
+  },
+  {
+    name: "recipes",
+    title: "Recipes (saved Lua scripts)",
+    description:
+      "Reusable Lua scripts kept as .lua files in the recipes folder of Superbase (the user can also run them from the dashboard). action list shows the recipes with their description and arguments; action run executes one in the game (name, and args for the recipe, available there as the table args); action save writes a new recipe (name, code, and a title, description and usage line for its header; overwrite true replaces an existing one). Recipe names are lowercase letters, digits, - and _. Recipes run with the executor's full permissions like execute_lua, so read a recipe's code before you run one you did not write. run needs the connected state, list and save do not.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["list", "run", "save"], description: "list (default), run or save." },
+        name: { type: "string", description: "run, save: the recipe name, for example list-remotes." },
+        args: { type: "object", description: "run: arguments for the recipe, available in Lua as the table args.", additionalProperties: true },
+        code: { type: "string", description: "save: the Lua code of the recipe. It can use args and should return a value." },
+        title: { type: "string", description: "save: short title for the header." },
+        description: { type: "string", description: "save: one line that says what the recipe does." },
+        usage: { type: "string", description: "save: one line that describes the args it takes, for example 'contains (string, optional)'." },
+        overwrite: { type: "boolean", description: "save: replace a recipe that already exists (default false)." },
+        client: CLIENT_PROPERTY,
+      },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    needsRoblox: (args) => args.action === "run",
+    // Listing and saving only touch the recipes folder, so they work without the bridge.
+    local: (args) => args.action !== "run",
+    run: async (args, ctx) => {
+      const action = args.action === undefined ? "list" : args.action;
+      try {
+        if (action === "list") {
+          return { dir: RECIPES_DIR, recipes: recipeStore.list(RECIPES_DIR) };
+        }
+        if (action === "run") {
+          const recipe = recipeStore.read(RECIPES_DIR, String(args.name || ""));
+          const recipeArgs = args.args && typeof args.args === "object" && !Array.isArray(args.args) ? args.args : {};
+          return await runLua(recipe.source, recipeArgs, { ...ctx, timeoutMs: 30000 });
+        }
+        if (action === "save") {
+          return recipeStore.save(RECIPES_DIR, String(args.name || ""), args.code, {
+            title: args.title,
+            description: args.description,
+            args: args.usage,
+            overwrite: args.overwrite === true,
+          });
+        }
+      } catch (error) {
+        if (error instanceof recipeStore.RecipeError) return { ok: false, value: null, error: error.message };
+        throw error;
+      }
+      throw new Error("'action' must be list, run or save.");
     },
   },
   {
@@ -870,24 +1108,50 @@ function formatImage(header, data) {
   };
 }
 
+// One-time notes for the status line: the bridge was started automatically, a new release exists.
+let updateNoticeFor = null;
+function pendingNotes(connection) {
+  const notes = [];
+  if (autostart.notice) {
+    notes.push(autostart.notice);
+    autostart.notice = null;
+  }
+  const update = connection.update;
+  if (update && update.available && update.latest && updateNoticeFor !== update.latest) {
+    updateNoticeFor = update.latest;
+    notes.push(`[Superbase] Version ${update.latest} is available (this is ${VERSION}). The user can update with npm run update in the Superbase folder.`);
+  }
+  return notes;
+}
+
 // Every result starts with a status line, so the AI always knows if Roblox is connected.
 async function callTool(tool, args) {
+  if (typeof tool.local === "function" && tool.local(args)) {
+    try {
+      const data = await tool.run(args, {});
+      return formatResult("[Superbase] Local action: the game was not contacted.", data, Boolean(data && data.ok === false));
+    } catch (error) {
+      return { content: [{ type: "text", text: `[Superbase] Local action: the game was not contacted.\n\n${error.message}` }], isError: true };
+    }
+  }
   const requestedClient = typeof args.client === "string" && args.client.length > 0 ? args.client : undefined;
   const connection = await assessConnection(tool.probe === true, requestedClient);
-  const header = statusLine(connection);
+  let header = statusLine(connection);
+  for (const note of pendingNotes(connection)) header = `${header}\n${note}`;
+  const needsRoblox = typeof tool.needsRoblox === "function" ? tool.needsRoblox(args) : tool.needsRoblox === true;
 
   if (tool.reportsConnection) {
     return formatResult(header, connection, false);
   }
 
   const bridgeUp = !BRIDGE_DOWN_STATES.has(connection.state);
-  if (!bridgeUp || (tool.needsRoblox && connection.state !== "connected")) {
+  if (!bridgeUp || (needsRoblox && connection.state !== "connected")) {
     return { content: [{ type: "text", text: `${header}\n\n${tool.name} was not run.` }], isError: true };
   }
 
   try {
     // Commands go to the client that was selected when the status was checked.
-    const context = { client: tool.needsRoblox ? connection.selectedClient || requestedClient : requestedClient };
+    const context = { client: needsRoblox ? connection.selectedClient || requestedClient : requestedClient };
     const data = await tool.run(args, context);
     if (data && data.image) {
       return formatImage(header, data);
@@ -919,7 +1183,7 @@ async function handleRequest(message) {
       return {};
     case "tools/list":
       return {
-        tools: tools.map(({ run, probe, needsRoblox, reportsConnection, ...definition }) => definition),
+        tools: tools.map(({ run, probe, needsRoblox, reportsConnection, local, ...definition }) => definition),
       };
     case "tools/call": {
       const params = message.params || {};

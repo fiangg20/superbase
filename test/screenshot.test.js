@@ -73,6 +73,10 @@ async function main() {
   await failsWith(captureRobloxWindow({ platform: "win32", run: async () => { throw new ScreenshotError(504, "The screenshot took too long."); } }), 504, /too long/);
 
   // The script itself: no request data may be spliced into it, and it must cover the cases above.
+  // The script is longer than a Windows command line may be once it is encoded, so it must run from a file.
+  const source = require("fs").readFileSync(require("path").join(__dirname, "..", "src", "screenshot.js"), "utf8");
+  assert.ok(source.includes('"-File", file') && !/"-EncodedCommand"|"-Command"/.test(source), "the script runs with -File, never on the command line");
+  assert.ok(!/[^\x00-\x7f]/.test(POWERSHELL_SCRIPT), "the script is plain ASCII");
   assert.ok(!/\$\{|%s/.test(POWERSHELL_SCRIPT), "the script is a constant");
   for (const needle of ["RobloxPlayerBeta", "CopyFromScreen", "SetProcessDPIAware", "SB_MAX_WIDTH", "SB_FOCUS", "not_found", "minimized", "image/jpeg"]) {
     assert.ok(POWERSHELL_SCRIPT.includes(needle), `the script must mention ${needle}`);

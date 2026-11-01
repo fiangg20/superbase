@@ -255,6 +255,7 @@
       state.online = true;
       state.authPrompted = false;
       if (wasOffline) {
+        loadRecipes();
         hideBanner();
         renderLogs();
         renderErrors();
@@ -744,6 +745,43 @@
     var item = luaHistory[Number(this.value)];
     if (this.value !== "" && item !== undefined) { $("lua-code").value = item; $("lua-code").focus(); }
     this.value = "";
+  });
+
+  /* Recipes are .lua files in the recipes folder of Superbase. Picking one puts its code in the editor. */
+  var recipes = { list: [] };
+  function renderRecipes() {
+    var select = $("lua-recipes");
+    select.textContent = "";
+    var first = el("option", "", recipes.list.length ? "Recipes" : "No recipes");
+    first.value = "";
+    select.appendChild(first);
+    recipes.list.forEach(function (recipe) {
+      var option = el("option", "", recipe.title || recipe.name);
+      option.value = recipe.name;
+      select.appendChild(option);
+    });
+    select.disabled = recipes.list.length === 0;
+  }
+  function loadRecipes() {
+    return api("GET", "/recipes", undefined, 6000).then(function (data) {
+      recipes.list = data && Array.isArray(data.recipes) ? data.recipes : [];
+      renderRecipes();
+    }, function () { /* The status banner already says when the bridge cannot be reached. */ });
+  }
+  $("lua-recipes").addEventListener("change", function () {
+    var select = this;
+    var name = select.value;
+    select.value = "";
+    if (name === "") return;
+    api("GET", "/recipes/" + encodeURIComponent(name), undefined, 6000).then(function (recipe) {
+      // Recipes read their settings from a table called args, so the editor starts with an empty one.
+      var note = recipe.args && recipe.args !== "none" ? "  -- " + recipe.args : "";
+      $("lua-code").value = "local args = {}" + note + "\n" + recipe.source;
+      $("lua-code").focus();
+      setLuaStatus((recipe.description || recipe.title || recipe.name) + " Change args above if you need to, then press Run.", "");
+    }, function (error) {
+      setLuaStatus("Could not load the recipe: " + error.message, "error");
+    });
   });
 
   function setOutput(text, isError) {

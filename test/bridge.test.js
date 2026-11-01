@@ -6,6 +6,8 @@
 const { spawn } = require("child_process");
 const assert = require("assert");
 const http = require("http");
+const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const WebSocket = require("ws");
 
@@ -21,11 +23,20 @@ const TOKEN_HEADERS = { "x-bridge-token": TOKEN, "content-type": "application/js
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// Keep the test away from the developer's own settings, state folder and the network.
+const ISOLATED_ENV = {
+  SUPERBASE_CONFIG: "none",
+  SUPERBASE_AUTOSTART: "0",
+  SUPERBASE_UPDATE_CHECK: "0",
+  SUPERBASE_HOME: fs.mkdtempSync(path.join(os.tmpdir(), "superbase-bridge-test-")),
+};
+
 function startBridge(port, extraEnv = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn("node", [BRIDGE], {
       env: {
         ...process.env,
+        ...ISOLATED_ENV,
         SUPERBASE_PORT: String(port),
         SUPERBASE_TOKEN: "",
         BRIDGE_PORT: "",
@@ -121,7 +132,26 @@ async function testOpenMode(BASE, stale, STALE_BASE) {
   const script = await res.text();
   assert.ok(script.includes(`Url = "ws://127.0.0.1:${PORT}"`), "the served script must use the bridge's own port");
   assert.ok(!script.includes("9731"), "the default port must be rewritten");
+  assert.ok(script.includes(`LoaderUrl = "http://127.0.0.1:${PORT}/client.lua"`), "the served script must know where to load itself from after a teleport");
   assert.ok(script.includes("Superbase"));
+
+  // 3b. Recipes: the list, one recipe with its source, and names that must not work.
+  res = await fetch(`${BASE}/recipes`, { headers: OPEN_HEADERS });
+  assert.strictEqual(res.status, 200);
+  let recipeList = await res.json();
+  assert.ok(recipeList.recipes.some((recipe) => recipe.name === "list-remotes" && recipe.title === "List remotes"), "the built-in recipes are listed");
+  res = await fetch(`${BASE}/recipes/list-remotes`, { headers: OPEN_HEADERS });
+  assert.strictEqual(res.status, 200);
+  const recipe = await res.json();
+  assert.ok(recipe.source.includes("RemoteEvent") && recipe.name === "list-remotes");
+  for (const bad of ["nope", "..%2Fpackage", "%2e%2e%2fpackage", "a%2Fb", "A"]) {
+    res = await fetch(`${BASE}/recipes/${bad}`, { headers: OPEN_HEADERS });
+    assert.strictEqual(res.status, 404, `/recipes/${bad} is not found`);
+  }
+  res = await rawRequest(PORT, { requestPath: "/recipes", headers: { Origin: "https://evil.example" } });
+  assert.strictEqual(res.status, 403, "recipes are protected from foreign origins");
+  res = await fetch(`${BASE}/recipes`);
+  assert.strictEqual(res.status, 401, "recipes need the client header like the rest of the API");
 
   // 4. WebSocket with a foreign Origin (browser-like) is rejected.
   await assert.rejects(openSocket(PORT, { headers: { Origin: "https://evil.example" } }));
@@ -456,7 +486,7 @@ async function testShortToken() {
   // A token that is too short must stop the bridge instead of running with weak protection.
   await new Promise((resolve, reject) => {
     const child = spawn("node", [BRIDGE], {
-      env: { ...process.env, SUPERBASE_PORT: String(SHORT_TOKEN_PORT), SUPERBASE_TOKEN: "short", BRIDGE_TOKEN: "" },
+      env: { ...process.env, ...ISOLATED_ENV, SUPERBASE_PORT: String(SHORT_TOKEN_PORT), SUPERBASE_TOKEN: "short", BRIDGE_TOKEN: "" },
     });
     let stderr = "";
     child.stderr.on("data", (data) => (stderr += data.toString()));

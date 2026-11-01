@@ -14,7 +14,13 @@ local inherits = {
     TextBox = "GuiObject", ClickDetector = "Instance", ProximityPrompt = "Instance",
     PlayerGui = "Instance", Player = "Instance", Players = "Instance", DataModel = "Instance",
     Workspace = "Instance", GuiService = "Instance",
+    Humanoid = "Instance", Tool = "Instance", Team = "Instance", Backpack = "Instance",
+    ValueBase = "Instance", IntValue = "ValueBase", StringValue = "ValueBase",
+    TextLabel = "GuiObject",
 }
+
+-- Members that exist in Roblox but are nil, so reading them must not raise an error.
+local nilMembers = { Player = { Character = true, Team = true } }
 
 local function classIs(class, target)
     while class do
@@ -73,6 +79,30 @@ function methods.FindFirstAncestorWhichIsA(self, class)
     return nil
 end
 function methods.GetAttribute(self, name) return rawget(self, "_attrs")[name] end
+function methods.GetAttributes(self)
+    local out = {}
+    for k, v in pairs(rawget(self, "_attrs")) do out[k] = v end
+    return out
+end
+function methods.FindFirstChildWhichIsA(self, class, recursive)
+    for _, c in ipairs(rawget(self, "_children")) do
+        if classIs(rawget(c, "ClassName"), class) then return c end
+    end
+    if recursive then
+        for _, c in ipairs(rawget(self, "_children")) do
+            local found = methods.FindFirstChildWhichIsA(c, class, true)
+            if found then return found end
+        end
+    end
+    return nil
+end
+function methods.GetPlayers(self)
+    local out = {}
+    for _, c in ipairs(rawget(self, "_children")) do
+        if rawget(c, "ClassName") == "Player" then out[#out + 1] = c end
+    end
+    return out
+end
 local extraServices = {}
 function methods.GetService(self, name)
     local found = self:FindFirstChild(name)
@@ -90,6 +120,8 @@ function methods.ReleaseFocus(self, submit) rawset(self, "_focused", false); raw
 Inst.__index = function(self, key)
     if methods[key] then return methods[key] end
     if key == "Parent" then return nil end
+    local optional = nilMembers[rawget(self, "ClassName")]
+    if optional and optional[key] then return nil end
     error(tostring(key) .. " is not a valid member of " .. rawget(self, "ClassName"), 2)
 end
 
@@ -144,8 +176,11 @@ env.game = game
 env.workspace = workspace
 env.typeof = function(v)
     if getmetatable(v) == Inst then return "Instance" end
+    if type(v) == "table" and v.__typeName then return v.__typeName end
     return type(v)
 end
+env.Vector3 = { new = function(x, y, z) return { __typeName = "Vector3", X = x, Y = y, Z = z } end }
+env.CFrame = { new = function(x, y, z) return { __typeName = "CFrame", X = x, Y = y, Z = z, Position = { X = x, Y = y, Z = z } } end }
 env.task = { wait = function() end }
 local genv = {}
 env.getgenv = function() return genv end
@@ -158,7 +193,7 @@ env.getconnections = function(signal)
 end
 
 local function run(file, args, overrides)
-    local f = assert(io.open(SNIPPETS .. file, "r"))
+    local f = assert(io.open(file:match("^recipes/") and file or (SNIPPETS .. file), "r"))
     local src = f:read("*a")
     f:close()
     local scope = setmetatable({}, { __index = env })

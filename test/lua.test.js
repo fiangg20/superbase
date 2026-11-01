@@ -107,4 +107,15 @@ const versions = {
 };
 assert.strictEqual(new Set(Object.values(versions)).size, 1, `versions differ: ${JSON.stringify(versions)}`);
 
+// Auto reconnect on teleport: the setting, the loader address the bridge fills in, every executor spelling of
+// queue_on_teleport, the goodbye message the bridge understands and the skipped intro.
+assert.ok(/AutoReconnectOnTeleport = true/.test(client), "auto reconnect is on by default");
+assert.ok(/LoaderUrl = ""/.test(client), "LoaderUrl is empty in the file, the bridge fills it in");
+for (const spelling of ["queue_on_teleport", "queueonteleport", "syn.queue_on_teleport", "fluxus.queue_on_teleport"]) {
+  assert.ok(client.includes(spelling), `the client looks for ${spelling}`);
+}
+assert.ok(client.includes('type = "goodbye"') && /case "goodbye"/.test(bridge), "the client says goodbye and the bridge understands it");
+assert.ok(/not resume then/.test(client), "the intro is skipped after a teleport");
+assert.ok(client.includes("__SuperbaseResume"), "the queued script marks itself as a resume");
+
 console.log(`ALL LUA CHECKS PASSED (${files.length} files, ${used.size} snippets, version ${versions.package})`);

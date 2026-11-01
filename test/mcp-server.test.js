@@ -6,6 +6,8 @@
 const { spawn } = require("child_process");
 const readline = require("readline");
 const assert = require("assert");
+const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const http = require("http");
 const WebSocket = require("ws");
@@ -17,6 +19,11 @@ const TOKEN_PORT = 19732;
 const STUB_PORT = 19733;
 const TOKEN = "mcp-test-token-1234567890abcdef";
 const CLEAN_ENV = {
+  SUPERBASE_CONFIG: "none",
+  SUPERBASE_AUTOSTART: "0",
+  SUPERBASE_UPDATE_CHECK: "0",
+  SUPERBASE_HOME: require("fs").mkdtempSync(path.join(require("os").tmpdir(), "superbase-mcp-test-")),
+  SUPERBASE_RECIPES: "",
   SUPERBASE_PORT: "",
   SUPERBASE_TOKEN: "",
   SUPERBASE_CLIENT_URL: "",
@@ -99,6 +106,12 @@ function decodeSnippet(code) {
     "search inside the source code": "search_scripts",
     "record calls to RemoteEvent": "remote_spy",
     "look at and operate the game's GUI": "gui_interact",
+    "players and their characters": "player_info",
+    "move the local character": "character_control",
+    "performance numbers of the running game": "stats",
+    "save the state of part of the game": "snapshot",
+    "-- Recipe: List remotes": "recipe:list-remotes",
+    "-- Recipe: Test recipe": "recipe:test-recipe",
   };
   const found = Object.keys(names).find((needle) => body.includes(needle));
   return { name: found ? names[found] : "unknown", args: JSON.parse(Buffer.from(bytes).toString("utf8")) };
@@ -193,6 +206,7 @@ async function main() {
 
     res = await mcp.rpc("tools/list");
     assert.deepStrictEqual(res.result.tools.map((tool) => tool.name).sort(), [
+      "character_control",
       "clear_logs",
       "execute_lua",
       "find_instances",
@@ -205,14 +219,18 @@ async function main() {
       "inspect_instance",
       "list_clients",
       "list_scripts",
+      "player_info",
+      "recipes",
       "remote_spy",
       "roblox_status",
       "screenshot",
       "search_scripts",
       "set_property",
+      "snapshot",
+      "stats",
       "wait_for_log",
     ]);
-    assert.strictEqual(res.result.tools.length, 18);
+    assert.strictEqual(res.result.tools.length, 23);
     for (const tool of res.result.tools) {
       assert.strictEqual(tool.inputSchema.type, "object");
       assert.strictEqual(tool.run, undefined, "implementation must not leak into tools/list");
@@ -222,7 +240,7 @@ async function main() {
       assert.ok(tool.description.length > 40, `${tool.name} needs a real description`);
     }
     const withClient = res.result.tools.filter((tool) => tool.inputSchema.properties.client).map((tool) => tool.name);
-    for (const name of ["execute_lua", "get_game_info", "inspect_instance", "get_hierarchy", "find_instances", "list_scripts", "get_script_source", "search_scripts", "remote_spy", "gui_interact", "set_property", "roblox_status", "get_logs", "get_errors", "wait_for_log", "clear_logs"]) {
+    for (const name of ["execute_lua", "get_game_info", "inspect_instance", "get_hierarchy", "find_instances", "list_scripts", "get_script_source", "search_scripts", "remote_spy", "gui_interact", "set_property", "roblox_status", "get_logs", "get_errors", "wait_for_log", "clear_logs", "player_info", "character_control", "stats", "snapshot", "recipes"]) {
       assert.ok(withClient.includes(name), `${name} must accept a client id`);
     }
     assert.ok(instructions.includes("list_clients") && instructions.includes("remote_spy"), "instructions describe the new tools");
@@ -236,6 +254,9 @@ async function main() {
     res = await mcp.call("execute_lua", { code: "return 1" });
     assert.strictEqual(res.result.isError, true);
     assert.ok(textOf(res).includes("npm start"), "the hint must say how to start the bridge");
+    assert.ok(textOf(res).includes("automatic start is turned off"), "the hint says why the bridge was not started for the user");
+    res = await mcp.call("recipes", { action: "list" });
+    assert.strictEqual(res.result.isError, false, "recipes can be listed without the bridge or a game");
 
     // State: waiting_for_roblox (the bridge runs, no game is connected).
     children.push(await startBridge(PORT));
@@ -399,6 +420,82 @@ async function main() {
 
     res = await mcp.call("set_property", { path: "game.A", property: "", value_json: "1" });
     assert.strictEqual(res.result.isError, true);
+
+    // The tools of 1.3.1: they validate their input and pass it on to the snippets.
+    res = await mcp.call("player_info", {});
+    assert.deepStrictEqual(bodyOf(res).value.args, { action: "list", player: "", details: false, limit: 50 });
+    assert.strictEqual(bodyOf(res).value.snippet, "player_info");
+    res = await mcp.call("player_info", { action: "character", player: "Bob", details: true, limit: 500 });
+    assert.deepStrictEqual(bodyOf(res).value.args, { action: "character", player: "Bob", details: true, limit: 100 });
+    res = await mcp.call("player_info", { action: "kick" });
+    assert.strictEqual(res.result.isError, true);
+
+    res = await mcp.call("character_control", { action: "teleport", position: { x: 1, y: 2, z: 3 }, offset_y: 5 });
+    assert.strictEqual(bodyOf(res).value.snippet, "character_control");
+    assert.deepStrictEqual(bodyOf(res).value.args, { action: "teleport", timeout: 10, position: { x: 1, y: 2, z: 3 }, offset_y: 5 });
+    res = await mcp.call("character_control", { action: "walk_to", player: "Alice", timeout: 99 });
+    assert.deepStrictEqual(bodyOf(res).value.args, { action: "walk_to", timeout: 30, player: "Alice" });
+    res = await mcp.call("character_control", { action: "fly" });
+    assert.strictEqual(res.result.isError, true);
+    assert.ok(textOf(res).includes("teleport or walk_to"));
+
+    res = await mcp.call("stats", {});
+    assert.deepStrictEqual(bodyOf(res).value.args, { sample_seconds: 1.5, memory: "summary" });
+    res = await mcp.call("stats", { sample_seconds: 60, memory: "detail" });
+    assert.deepStrictEqual(bodyOf(res).value.args, { sample_seconds: 5, memory: "detail" });
+
+    res = await mcp.call("snapshot", {});
+    assert.strictEqual(bodyOf(res).value.args.action, "take");
+    res = await mcp.call("snapshot", { action: "diff", name: "before", keep: true, limit: 999 });
+    assert.deepStrictEqual(bodyOf(res).value.args, { action: "diff", limit: 200, keep: true, name: "before" });
+    res = await mcp.call("snapshot", { action: "take", path: "game.Workspace.Map", depth: 99, properties: ["Anchored", 5, ""], max_instances: 99999 });
+    assert.deepStrictEqual(bodyOf(res).value.args.properties, ["Anchored"]);
+    assert.strictEqual(bodyOf(res).value.args.depth, 10);
+    assert.strictEqual(bodyOf(res).value.args.max_instances, 5000);
+    res = await mcp.call("snapshot", { action: "restore" });
+    assert.strictEqual(res.result.isError, true);
+
+    // Recipes: the built-in ones are listed, a saved one can be run, and nothing leaves the folder.
+    res = await mcp.call("recipes", {});
+    const listed = bodyOf(res).recipes.map((recipe) => recipe.name);
+    for (const name of ["list-remotes", "dump-leaderstats", "list-gui-text", "workspace-summary", "list-sounds"]) {
+      assert.ok(listed.includes(name), `the built-in recipe ${name} is listed`);
+    }
+    res = await mcp.call("recipes", { action: "run", name: "list-remotes", args: { contains: "buy" } });
+    assert.strictEqual(bodyOf(res).value.snippet, "recipe:list-remotes");
+    assert.deepStrictEqual(bodyOf(res).value.args, { contains: "buy" });
+    res = await mcp.call("recipes", { action: "run", name: "nope-not-there" });
+    assert.strictEqual(res.result.isError, true);
+    assert.ok(textOf(res).includes("no recipe called"));
+    res = await mcp.call("recipes", { action: "run", name: "../package" });
+    assert.strictEqual(res.result.isError, true);
+    res = await mcp.call("recipes", { action: "bake" });
+    assert.strictEqual(res.result.isError, true);
+
+    const recipeDir = fs.mkdtempSync(path.join(os.tmpdir(), "superbase-recipes-"));
+    const own = startMcp(PORT, { SUPERBASE_RECIPES: recipeDir });
+    children.push(own.child);
+    res = await own.call("recipes", { action: "save", name: "test-recipe", title: "Test recipe", description: "Returns one.", usage: "none", code: "return { one = 1 }" });
+    assert.strictEqual(res.result.isError, false);
+    const saved = fs.readFileSync(path.join(recipeDir, "test-recipe.lua"), "utf8");
+    assert.ok(saved.startsWith("-- Recipe: Test recipe\n-- Description: Returns one.\n-- Args: none\n"), saved);
+    res = await own.call("recipes", { action: "save", name: "test-recipe", code: "return 2" });
+    assert.strictEqual(res.result.isError, true, "an existing recipe is not replaced silently");
+    assert.ok(textOf(res).includes("overwrite"));
+    res = await own.call("recipes", { action: "save", name: "test-recipe", code: "return 2", overwrite: true });
+    assert.strictEqual(res.result.isError, false);
+    for (const bad of ["../escape", "a/b", "A B", "", "x".repeat(70)]) {
+      res = await own.call("recipes", { action: "save", name: bad, code: "return 1" });
+      assert.strictEqual(res.result.isError, true, `the name ${JSON.stringify(bad)} is refused`);
+    }
+    assert.deepStrictEqual(fs.readdirSync(recipeDir), ["test-recipe.lua"], "nothing was written outside the recipe");
+    fs.writeFileSync(path.join(recipeDir, "test-recipe.lua"), "-- Recipe: Test recipe\nreturn args\n");
+    res = await own.call("recipes", { action: "run", name: "test-recipe", args: { a: 1 } });
+    assert.strictEqual(bodyOf(res).value.snippet, "recipe:test-recipe");
+    assert.deepStrictEqual(bodyOf(res).value.args, { a: 1 });
+    res = await own.call("recipes", { action: "list" });
+    assert.deepStrictEqual(bodyOf(res).recipes.map((recipe) => recipe.name), ["test-recipe"]);
+    fs.rmSync(recipeDir, { recursive: true, force: true });
 
     // wait_for_log: a match, a timeout and validation.
     const waiting = mcp.call("wait_for_log", { contains: "deploy finished", timeout_ms: 5000 });
@@ -648,6 +745,40 @@ async function main() {
     assert.strictEqual(res.result.isError, false);
     assert.ok(textOf(res).includes("ran: return 2"));
     tokenExecutor.close();
+
+    // Automatic start: the MCP server starts the bridge itself when nobody did, and says so once.
+    const AUTO_PORT = 19736;
+    const autoHome = fs.mkdtempSync(path.join(os.tmpdir(), "superbase-autostart-"));
+    const auto = startMcp(AUTO_PORT, { SUPERBASE_AUTOSTART: "1", SUPERBASE_HOME: autoHome });
+    children.push(auto.child);
+    let autoPid = null;
+    try {
+      res = await auto.call("roblox_status", {});
+      assert.ok(textOf(res).includes("waiting_for_roblox"), textOf(res));
+      assert.ok(textOf(res).includes("started in the background"), "the first answer says the bridge was started");
+      autoPid = JSON.parse(fs.readFileSync(path.join(autoHome, "bridge.json"), "utf8")).pid;
+      assert.ok(autoPid > 0, "the state file holds the process id");
+      assert.ok(fs.existsSync(path.join(autoHome, "bridge.log")), "the bridge writes a log file");
+      res = await auto.call("roblox_status", {});
+      assert.ok(!textOf(res).includes("started in the background"), "the note appears only once");
+      assert.strictEqual(bodyOf(res).bridgePid, autoPid);
+    } finally {
+      if (autoPid) {
+        try {
+          process.kill(autoPid);
+        } catch {
+          // Already gone.
+        }
+      }
+    }
+
+    // When the bridge cannot be started, the hint says why and does not try again right away.
+    const broken = startMcp(19737, { SUPERBASE_AUTOSTART: "1", SUPERBASE_HOME: path.join(autoHome, "file-not-folder") });
+    children.push(broken.child);
+    fs.writeFileSync(path.join(autoHome, "file-not-folder"), "x");
+    res = await broken.call("roblox_status", {});
+    assert.ok(textOf(res).includes("bridge_offline") && textOf(res).includes("could not be started automatically"), textOf(res));
+    fs.rmSync(autoHome, { recursive: true, force: true });
 
     console.log("ALL SUPERBASE CHECKS PASSED");
   } finally {

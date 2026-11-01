@@ -22,6 +22,10 @@ const http = require("http");
 const path = require("path");
 const crypto = require("crypto");
 const terminal = require("./terminal");
+const { loadSettings, ROOT } = require("./config");
+const background = require("./background");
+const updateCheck = require("./update-check");
+const recipes = require("./recipes");
 const { captureRobloxWindow, ScreenshotError } = require("./screenshot");
 
 let WebSocketServer;
@@ -35,10 +39,11 @@ try {
   process.exit(1);
 }
 
-const VERSION = "1.3.0";
+const VERSION = "1.3.1";
 const HOST = "127.0.0.1";
-const PORT = Number(process.env.SUPERBASE_PORT || process.env.BRIDGE_PORT || 9731);
-const TOKEN = process.env.SUPERBASE_TOKEN || process.env.BRIDGE_TOKEN || "";
+const settings = loadSettings(process.env);
+const PORT = settings.port;
+const TOKEN = settings.token;
 const OPEN_MODE = TOKEN === "";
 const MAX_ENTRIES = 1000;
 const DEFAULT_COMMAND_TIMEOUT_MS = 15000;
@@ -46,13 +51,13 @@ const MIN_COMMAND_TIMEOUT_MS = 1000;
 const MAX_COMMAND_TIMEOUT_MS = 120000;
 const PROBE_TIMEOUT_MS = 3000;
 const MAX_BODY_BYTES = 1024 * 1024;
-const PING_INTERVAL_MS = Number(process.env.SUPERBASE_PING_MS || 10000);
-const STALE_AFTER_MS = Number(process.env.SUPERBASE_STALE_MS || 30000);
+const PING_INTERVAL_MS = settings.pingMs;
+const STALE_AFTER_MS = settings.staleMs;
 const STARTED_AT = Date.now();
 
 // In a terminal the bridge prints a styled startup screen and one line per event, with the time.
 // When the output goes to a file or a pipe, or SUPERBASE_PLAIN is set, it prints the plain lines.
-const FANCY = Boolean(process.stdout.isTTY) && !process.env.SUPERBASE_PLAIN;
+const FANCY = Boolean(process.stdout.isTTY) && !settings.plain;
 const ui = terminal.makeUi(FANCY && !process.env.NO_COLOR, FANCY && terminal.supportsUnicode(process.platform, process.env));
 
 // kind: ok, warn, fail or info. "debug" lines are only printed in plain mode.
@@ -101,6 +106,7 @@ const pendingPings = new Map(); // ping id -> { sentAt, ws, resolve?, reject?, t
 let clientSequence = 0;
 let entrySequence = 0; // gives every stored log and error a unique, increasing id
 let lastDisconnectAt = null;
+let lastDisconnectReason = null; // "teleport" when the client said goodbye before it left
 
 function findClientScript() {
   return CLIENT_SCRIPT_CANDIDATES.find((candidate) => fs.existsSync(candidate)) || null;
@@ -110,9 +116,14 @@ function findClientScript() {
 function readClientScript() {
   const file = findClientScript();
   if (!file) return null;
-  return fs.readFileSync(file, "utf8").replace(/Url = "ws:\/\/[^"]*"/, `Url = "ws://${HOST}:${PORT}"`);
+  // The client also gets the address it was loaded from, so it can load itself again after a teleport.
+  return fs
+    .readFileSync(file, "utf8")
+    .replace(/Url = "ws:\/\/[^"]*"/, `Url = "ws://${HOST}:${PORT}"`)
+    .replace(/LoaderUrl = "[^"]*"/, `LoaderUrl = "http://${HOST}:${PORT}/client.lua"`);
 }
 
+const RECIPES_DIR = recipes.recipesDir(settings, ROOT);
 const CLIENT_URL = OPEN_MODE && findClientScript() ? `http://${HOST}:${PORT}/client.lua` : null;
 
 function pushBounded(list, entry) {
@@ -291,6 +302,10 @@ function handleClientMessage(ws, message) {
         script: message.script ? String(message.script) : null,
       });
       break;
+    case "goodbye":
+      // The client says why it is about to leave, for example because the game is teleporting.
+      ws.goodbye = String(message.reason || "").slice(0, 40);
+      break;
     case "result": {
       const entry = pending.get(message.id);
       if (entry && entry.ws === ws) {
@@ -331,9 +346,12 @@ function connectionInfo(requestedId, target) {
     lastSeenMsAgo: live ? now - target.lastSeen : null,
     latencyMs: live && typeof target.latencyMs === "number" ? target.latencyMs : null,
     lastDisconnectedSecAgo: !live && lastDisconnectAt ? Math.round((now - lastDisconnectAt) / 1000) : null,
+    lastDisconnectReason: !live && lastDisconnectAt ? lastDisconnectReason : null,
     logCount: logs.length,
     errorCount: errors.length,
     bridgeVersion: VERSION,
+    bridgePid: process.pid,
+    update: updateCheck.current(),
     bridgeUptimeSec: Math.round((now - STARTED_AT) / 1000),
   };
 }
@@ -585,6 +603,14 @@ const server = http.createServer(async (req, res) => {
           { client: body.client, timeoutMs: clampTimeout(body.timeout_ms) },
         ),
       );
+    } else if (route === "GET /recipes") {
+      sendJson(res, 200, { dir: RECIPES_DIR, recipes: recipes.list(RECIPES_DIR) });
+    } else if (req.method === "GET" && url.pathname.startsWith("/recipes/")) {
+      try {
+        sendJson(res, 200, recipes.read(RECIPES_DIR, decodeURIComponent(url.pathname.slice("/recipes/".length))));
+      } catch (error) {
+        sendJson(res, error instanceof recipes.RecipeError ? 404 : 400, { error: error.message });
+      }
     } else if (route === "GET /screenshot") {
       try {
         const shot = await captureRobloxWindow({
@@ -690,8 +716,9 @@ wss.on("connection", (ws) => {
     if (ws.id && clients.get(ws.id) === ws) {
       clients.delete(ws.id);
       lastDisconnectAt = Date.now();
+      lastDisconnectReason = ws.goodbye || null;
       rejectAllPending(ws, "Executor disconnected");
-      note("info", `executor ${ws.id} disconnected`);
+      note("info", `executor ${ws.id} disconnected${ws.goodbye ? ` (${ws.goodbye})` : ""}`);
     }
   });
 
@@ -726,21 +753,27 @@ heartbeat.unref();
 
 // A port that is taken is the most common reason the bridge does not start, so it gets a clear message.
 let failedToStart = false;
-function onServerError(error) {
+async function onServerError(error) {
   if (failedToStart) return;
   failedToStart = true;
   const next = PORT + 1;
   const retry = process.platform === "win32" ? `$env:SUPERBASE_PORT = "${next}"; npm start` : `SUPERBASE_PORT=${next} npm start`;
   if (error.code === "EADDRINUSE") {
+    // Most of the time the port is taken by another Superbase bridge, often the one that runs in the background.
+    const other = await background.probe(PORT, TOKEN);
+    const lines = other && !other.unauthorized
+      ? [
+          `A Superbase bridge is already running on port ${PORT}${other.bridgePid ? ` (process ${other.bridgePid})` : ""}.`,
+          "Use it, or stop it first with: npm run stop",
+        ]
+      : [`Port ${PORT} is already in use by another program.`, `Close it, or use another port: ${retry}`, "The MCP server needs the same port, so set SUPERBASE_PORT there too."];
     if (FANCY) {
       console.log("");
-      console.log(`  ${ui.red(ui.sym.fail)} ${ui.bold(`Port ${PORT} is already in use`)}`);
-      console.log(`    ${ui.dim("Another Superbase bridge is probably running. Close it, or use another port:")}`);
-      console.log(`      ${ui.cyan(retry)}`);
-      console.log(`    ${ui.dim("The MCP server needs the same port, so set SUPERBASE_PORT there too.")}`);
+      console.log(`  ${ui.red(ui.sym.fail)} ${ui.bold(lines[0])}`);
+      for (const line of lines.slice(1)) console.log(`    ${ui.dim(line)}`);
       console.log("");
     } else {
-      console.error(`[superbase] Port ${PORT} is already in use. Another bridge is probably running. Close it, or start with ${retry}`);
+      console.error(`[superbase] ${lines.join(" ")}`);
     }
   } else {
     console.error(`[superbase] The bridge could not start: ${error.message}`);
@@ -750,6 +783,9 @@ function onServerError(error) {
 server.on("error", onServerError);
 wss.on("error", onServerError);
 
+// Leave cleanly, so the state file of the background bridge does not point at a process that is gone.
+process.on("exit", () => background.clearState(process.env, ROOT, process.pid));
+process.on("SIGTERM", () => process.exit(0));
 if (FANCY) {
   process.on("SIGINT", () => {
     console.log("");
@@ -757,12 +793,27 @@ if (FANCY) {
     console.log("");
     process.exit(0);
   });
+} else {
+  process.on("SIGINT", () => process.exit(0));
+}
+
+function announceUpdate(result) {
+  if (!result || !result.available) return;
+  note("ok", `Update available: ${result.latest} (you have ${VERSION}). Run npm run update, details: ${result.url}`);
 }
 
 server.listen(PORT, HOST, () => {
+  try {
+    background.writeState(process.env, ROOT, { pid: process.pid, port: PORT, version: VERSION, startedAt: new Date(STARTED_AT).toISOString() });
+  } catch {
+    // The state file only helps npm run stop and status. The bridge works without it.
+  }
+
   if (!FANCY) {
     console.log(`[superbase] bridge ${VERSION} listening on ws://${HOST}:${PORT} (HTTP API on the same port)`);
     console.log(`[superbase] dashboard: http://${HOST}:${PORT}/`);
+    if (settings.file) console.log(`[superbase] settings from ${settings.file}`);
+    for (const warning of settings.warnings) console.log(`[superbase] warning: ${warning}`);
     if (OPEN_MODE) {
       console.log("[superbase] open mode: no token needed. Web pages are blocked, but any program on this computer can use the bridge.");
       console.log("[superbase] set BRIDGE_TOKEN to require a token instead.");
@@ -774,27 +825,36 @@ server.listen(PORT, HOST, () => {
     } else {
       console.log("[superbase] token mode: every request and the executor handshake must carry the token.");
     }
-    return;
+  } else {
+    const row = (label, value) => console.log(`  ${ui.green(ui.sym.live)} ${ui.bold(label.padEnd(12))}${value}`);
+    terminal.banner(ui, `Superbase Bridge ${VERSION}`, "Roblox executor and AI, connected", (line) => console.log(line));
+    row("Running", `ws://${HOST}:${PORT}`);
+    row("Dashboard", ui.cyan(`http://${HOST}:${PORT}/`));
+    if (OPEN_MODE) {
+      row("Mode", `open ${ui.dim("(no token, web pages are blocked)")}`);
+    } else {
+      row("Mode", `token ${ui.dim("(every request must carry the token)")}`);
+    }
+    if (settings.file) row("Settings", ui.dim(path.basename(settings.file)));
+    console.log("");
+    for (const warning of settings.warnings) console.log(`  ${ui.yellow(ui.sym.warn)} ${warning}`);
+    if (settings.warnings.length > 0) console.log("");
+    if (OPEN_MODE && CLIENT_URL) {
+      console.log(`  ${ui.bold("Load this in your executor")}`);
+      console.log(`    ${ui.cyan(`loadstring(game:HttpGet("${CLIENT_URL}"))()`)}`);
+      console.log("");
+    } else if (OPEN_MODE) {
+      console.log(`  ${ui.yellow(ui.sym.warn)} roblox/client.lua was not found, so /client.lua is not available.`);
+      console.log("");
+    }
+    console.log(`  ${ui.dim("Waiting for a Roblox client. Press Ctrl+C to stop.")}`);
+    console.log("");
   }
 
-  const row = (label, value) => console.log(`  ${ui.green(ui.sym.live)} ${ui.bold(label.padEnd(12))}${value}`);
-  terminal.banner(ui, `Superbase Bridge ${VERSION}`, "Roblox executor and AI, connected", (line) => console.log(line));
-  row("Running", `ws://${HOST}:${PORT}`);
-  row("Dashboard", ui.cyan(`http://${HOST}:${PORT}/`));
-  if (OPEN_MODE) {
-    row("Mode", `open ${ui.dim("(no token, web pages are blocked)")}`);
-  } else {
-    row("Mode", `token ${ui.dim("(every request must carry the token)")}`);
+  if (settings.updateCheck) {
+    updateCheck
+      .check({ current: VERSION, cacheFile: path.join(background.locations(process.env, ROOT).dir, "update.json") })
+      .then(announceUpdate)
+      .catch(() => {});
   }
-  console.log("");
-  if (OPEN_MODE && CLIENT_URL) {
-    console.log(`  ${ui.bold("Load this in your executor")}`);
-    console.log(`    ${ui.cyan(`loadstring(game:HttpGet("${CLIENT_URL}"))()`)}`);
-    console.log("");
-  } else if (OPEN_MODE) {
-    console.log(`  ${ui.yellow(ui.sym.warn)} roblox/client.lua was not found, so /client.lua is not available.`);
-    console.log("");
-  }
-  console.log(`  ${ui.dim(`Waiting for a Roblox client. Press Ctrl+C to stop.`)}`);
-  console.log("");
 });

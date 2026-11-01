@@ -212,4 +212,206 @@ check("spy: reports missing executor APIs", r.error and r.error:find("hookmetame
 r = run("remote_spy.lua", { action = "nope" }, {})
 check("spy: unknown action", r.error ~= nil)
 
+-- player_info and character_control -------------------------------------------
+local new = H.new
+local function makeCharacter(owner, name, x, y, z, health)
+    local model = new("Model", name, {})
+    local rootPart = new("Part", "HumanoidRootPart", { Position = { X = x, Y = y, Z = z } }, model)
+    local humanoid = new("Humanoid", "Humanoid", {
+        Health = health, MaxHealth = 100, WalkSpeed = 16, UseJumpPower = true, JumpPower = 50, Sit = false, RigType = "R15",
+    }, model)
+    rawset(humanoid, "GetState", function() return "Running" end)
+    rawset(owner, "Character", model)
+    return model, rootPart, humanoid
+end
+
+rawset(H.nodes.bob, "DisplayName", "Bobby")
+r = run("player_info.lua", { action = "list" })
+check("players: list without characters", r.count == 1 and r.players[1].isLocal == true and r.players[1].hasCharacter == false, r.count)
+
+local bobModel, bobRoot, bobHumanoid = makeCharacter(H.nodes.bob, "Bob", 0, 10, 0, 80)
+local alice = new("Player", "Alice", { UserId = 8, DisplayName = "Ali" }, H.env.Players)
+local aliceModel = makeCharacter(alice, "Alice", 3, 10, 4, 100)
+new("Tool", "Sword", {}, aliceModel)
+local backpack = new("Backpack", "Backpack", {}, alice)
+new("Tool", "Bow", {}, backpack)
+local stats = new("Folder", "leaderstats", {}, alice)
+new("IntValue", "Coins", { Value = 42 }, stats)
+rawget(alice, "_attrs").Vip = true
+
+r = run("player_info.lua", { action = "list" })
+check("players: list with positions", r.count == 2 and r.players[1].position.y == 10 and r.players[2].distance == 5, r.players[2] and r.players[2].distance)
+check("players: list is lean without details", r.players[2].walkSpeed == nil and r.players[2].equipped == nil)
+r = run("player_info.lua", { action = "list", details = true, limit = 1 })
+check("players: limit and truncated", r.returned == 1 and r.truncated == true)
+r = run("player_info.lua", { action = "character", player = "ali" })
+check("players: character by display name", r.name == "Alice" and r.walkSpeed == 16 and r.jumpPower == 50 and r.state == "Running", r.name)
+check("players: tools and leaderstats", r.equipped[1] == "Sword" and r.backpack[1] == "Bow" and r.leaderstats.Coins == 42, r.leaderstats and r.leaderstats.Coins)
+check("players: attributes", r.attributes and r.attributes.Vip == true)
+r = run("player_info.lua", { action = "character" })
+check("players: character defaults to local player", r.name == "Bob" and r.health == 80 and r.isLocal == true, r.name)
+r = run("player_info.lua", { action = "character", player = "8" })
+check("players: character by user id", r.name == "Alice")
+r = run("player_info.lua", { action = "character", player = "nobody" })
+check("players: unknown player is an error", r.error ~= nil and r.error:find("nobody") ~= nil)
+r = run("player_info.lua", { action = "nope" })
+check("players: unknown action", r.error ~= nil)
+
+local function placeCharacter()
+    rawset(bobModel, "PivotTo", function(self, cf)
+        rawset(bobRoot, "Position", { X = cf.X, Y = cf.Y, Z = cf.Z })
+    end)
+end
+placeCharacter()
+r = run("character_control.lua", { action = "teleport", position = { x = 5, y = 6, z = 7 } })
+check("character: teleport to position", r.to.x == 5 and r.to.y == 6 and r.to.z == 7 and r.from.y == 10, r.error or r.to.x)
+r = run("character_control.lua", { action = "teleport", player = "Alice", offset_y = 2 })
+check("character: teleport to player with offset", r.to.x == 3 and r.to.y == 12 and r.to.z == 4, r.error or r.to.y)
+rawset(H.nodes.map:FindFirstChild("Floor"), "Position", { X = 1, Y = 2, Z = 3 })
+r = run("character_control.lua", { action = "teleport", path = "game.Workspace.Map.Floor" })
+check("character: teleport to an instance path", r.error == nil and r.to.x == 1 and r.to.y == 5 and r.to.z == 3, r.error or r.to.y)
+r = run("character_control.lua", { action = "teleport", path = "game.Workspace.Nope" })
+check("character: missing path is an error", r.error ~= nil and r.error:find("Nope") ~= nil, r.error)
+r = run("character_control.lua", { action = "teleport", player = "Bob" })
+check("character: cannot go to yourself", r.error ~= nil)
+r = run("character_control.lua", { action = "teleport" })
+check("character: target is required", r.error ~= nil and r.error:find("target") ~= nil, r.error)
+r = run("character_control.lua", { action = "teleport", position = { x = 1, y = "a", z = 2 } })
+check("character: position must be numeric", r.error ~= nil)
+r = run("character_control.lua", { action = "fly", position = { x = 1, y = 1, z = 1 } })
+check("character: unknown action", r.error ~= nil)
+
+-- walk_to: the mock humanoid finishes the walk when MoveTo is called.
+local finishWalk = true
+local callback
+rawset(bobHumanoid, "MoveToFinished", { Connect = function(self, fn)
+    callback = fn
+    return { Disconnect = function() end }
+end })
+rawset(bobHumanoid, "MoveTo", function(self, target)
+    rawset(bobRoot, "Position", { X = target.X, Y = target.Y, Z = target.Z })
+    if finishWalk then callback(true) end
+end)
+r = run("character_control.lua", { action = "walk_to", position = { x = 20, y = 10, z = 0 } })
+check("character: walk_to reaches the goal", r.reached == true and r.timedOut == false and r.to.x == 20 and r.distanceLeft == 0, r.error or r.reached)
+finishWalk = false
+rawset(bobHumanoid, "MoveTo", function() end)
+r = run("character_control.lua", { action = "walk_to", position = { x = 90, y = 10, z = 0 }, timeout = 1 })
+check("character: walk_to times out", r.reached == false and r.timedOut == true and r.distanceLeft > 60, r.error or r.distanceLeft)
+rawset(H.nodes.bob, "Character", nil)
+r = run("character_control.lua", { action = "teleport", position = { x = 1, y = 1, z = 1 } })
+check("character: no character is an error", r.error ~= nil)
+rawset(H.nodes.bob, "Character", bobModel)
+
+-- stats ------------------------------------------------------------------------
+local frameHandlers = {}
+local fakeRunService = { RenderStepped = { Connect = function(self, fn)
+    frameHandlers[#frameHandlers + 1] = fn
+    return { Disconnect = function() frameHandlers = {} end }
+end } }
+H.extraServices.RunService = fakeRunService
+H.extraServices.Stats = {
+    GetTotalMemoryUsageMb = function() return 1234.56 end,
+    GetMemoryUsageMbForTag = function() return 10 end,
+    DataReceiveKbps = 12.345, DataSendKbps = 1.5, InstanceCount = 5000, PrimitivesCount = 800,
+}
+local function fakeTask(deltas)
+    return { wait = function()
+        for _, delta in ipairs(deltas) do
+            for _, fn in ipairs(frameHandlers) do fn(delta) end
+        end
+    end }
+end
+local smooth = {}
+for i = 1, 100 do smooth[i] = 1 / 60 end
+r = run("stats.lua", { sample_seconds = 1 }, { task = fakeTask(smooth) })
+check("stats: smooth frames", r.frames.count == 100 and r.frames.avgFps == 60 and r.frames.stutters == 0, r.frames.avgFps)
+check("stats: memory and world", r.memory.totalMb == 1234.6 and r.world.instances == 5000 and r.world.players == 2, r.memory.totalMb)
+check("stats: network leaves out what is missing", r.network.receiveKbps == 12.3 and r.network.pingMs == nil, r.network.receiveKbps)
+check("stats: no notes when all is well", #r.notes == 0, #r.notes)
+local choppy = {}
+for i = 1, 100 do choppy[i] = 1 / 60 end
+choppy[50] = 0.2
+r = run("stats.lua", {}, { task = fakeTask(choppy) })
+check("stats: stutter is reported", r.frames.stutters == 1 and r.frames.worstFrameMs == 200 and r.frames.minFps == 5 and #r.notes >= 1, r.frames.stutters)
+check("stats: 1% low uses the slowest frames", r.frames.onePercentLowFps == 5, r.frames.onePercentLowFps)
+r = run("stats.lua", { sample_seconds = 99 }, { task = fakeTask({}) })
+check("stats: sample clamped and no frames handled", r.sampleSeconds == 5 and r.frames.count == 0 and r.frames.note ~= nil)
+r = run("stats.lua", { memory = "detail" }, { task = fakeTask(smooth), Enum = { DeveloperMemoryTag = { GetEnumItems = function() return { { Name = "Gui" }, { Name = "Sounds" } } end } } })
+check("stats: memory detail lists categories", r.memory.categories and #r.memory.categories == 2 and r.memory.categories[1].mb == 10)
+
+-- snapshot ---------------------------------------------------------------------
+local ws = H.nodes.workspace
+r = run("snapshot.lua", { action = "list" })
+check("snapshot: list starts empty", r.count == 0)
+r = run("snapshot.lua", { action = "diff", name = "x" })
+check("snapshot: diff without a snapshot is an error", r.error ~= nil and r.error:find("Take one") ~= nil)
+r = run("snapshot.lua", { action = "take", name = "before", path = "game.Workspace.Map", depth = 3 })
+check("snapshot: take", r.saved == "before" and r.instances == 3 and r.truncated == false, r.error or r.instances)
+r = run("snapshot.lua", { action = "diff", name = "before" })
+check("snapshot: unchanged world", r.unchanged == true and r.counts.changed == 0, r.counts and r.counts.changed)
+
+local floor = H.nodes.map:FindFirstChild("Floor")
+rawset(floor, "Anchored", false)
+rawset(floor, "Size", "10, 2, 10")
+new("Part", "Crate", { Anchored = true }, H.nodes.map)
+new("Part", "Crate", { Anchored = true }, H.nodes.map)
+local wall = H.nodes.map:FindFirstChild("Wall")
+table.remove(rawget(H.nodes.map, "_children"), 2)
+r = run("snapshot.lua", { action = "diff", name = "before" })
+check("snapshot: counts", r.counts.added == 2 and r.counts.removed == 1 and r.counts.changed == 2, r.counts.added .. "/" .. r.counts.removed .. "/" .. r.counts.changed)
+check("snapshot: removed path", r.removed[1].path == "Map.Wall", r.removed[1] and r.removed[1].path)
+check("snapshot: duplicate names get a number", r.added[1].path == "Map.Crate" and r.added[2].path == "Map.Crate#2", r.added[1] and r.added[1].path)
+local seen = {}
+for _, change in ipairs(r.changed) do seen[change.property] = change.before .. ">" .. change.after end
+check("snapshot: property changes", seen.Anchored == "true>false" and seen.Size == "10, 1, 10>10, 2, 10", seen.Anchored)
+r = run("snapshot.lua", { action = "diff", name = "before", limit = 1 })
+check("snapshot: lists are cut at the limit", #r.added == 1 and r.counts.added == 2 and r.listsCut == true)
+r = run("snapshot.lua", { action = "diff", name = "before", keep = true })
+r = run("snapshot.lua", { action = "diff", name = "before" })
+check("snapshot: keep replaces the saved state", r.unchanged == true)
+r = run("snapshot.lua", { action = "take", name = "tiny", path = "game.Workspace", max_instances = 5, depth = 6 })
+check("snapshot: max_instances truncates", r.truncated == true and r.instances == 5 and r.note ~= nil)
+r = run("snapshot.lua", { action = "take", name = "props", path = "game.Workspace.Map.Floor", properties = { "Reflectance", "Missing" } })
+check("snapshot: custom properties skip missing ones", r.instances == 1)
+r = run("snapshot.lua", { action = "list" })
+check("snapshot: list shows slots", r.count == 3 and r.snapshots[1].name == "before", r.count)
+r = run("snapshot.lua", { action = "take", name = "gone", path = "game.Nope" })
+check("snapshot: missing path is an error", r.error ~= nil and r.error:find("Nope") ~= nil)
+r = run("snapshot.lua", { action = "delete", name = "tiny" })
+check("snapshot: delete", r.deleted == "tiny")
+r = run("snapshot.lua", { action = "delete", name = "tiny" })
+check("snapshot: delete unknown", r.error ~= nil)
+for i = 1, 8 do run("snapshot.lua", { action = "take", name = "slot" .. i, path = "game.Workspace.Map", depth = 1 }) end
+r = run("snapshot.lua", { action = "take", name = "overflow", path = "game.Workspace.Map", depth = 1 })
+check("snapshot: slot limit", r.error ~= nil and r.error:find("10") ~= nil, r.error)
+r = run("snapshot.lua", { action = "take", name = "slot1", path = "game.Workspace.Map", depth = 1 })
+check("snapshot: retaking an existing slot is allowed", r.saved == "slot1")
+r = run("snapshot.lua", { action = "wat" })
+check("snapshot: unknown action", r.error ~= nil)
+
+-- built-in recipes ---------------------------------------------------------------
+r = run("recipes/list-remotes.lua", {})
+check("recipe list-remotes: finds both remotes", r.total == 2 and r.remotes[1].class ~= nil, r.total)
+r = run("recipes/list-remotes.lua", { contains = "BUY" })
+check("recipe list-remotes: contains is case-insensitive", r.total == 1 and r.remotes[1].path == "ReplicatedStorage.Buy", r.total)
+r = run("recipes/list-remotes.lua", { limit = 1 })
+check("recipe list-remotes: limit", r.returned == 1 and r.total == 2)
+r = run("recipes/dump-leaderstats.lua", {})
+check("recipe dump-leaderstats", r.players == 2 and r.stats[2].values.Coins == 42 and r.stats[1].hasLeaderstats == false, r.players)
+r = run("recipes/list-gui-text.lua", { contains = "play" })
+check("recipe list-gui-text: filter", r.total == 1 and r.texts[1].text == "Play", r.total)
+r = run("recipes/list-gui-text.lua", {})
+local allText = true
+for _, item in ipairs(r.texts) do if item.text == "" then allText = false end end
+check("recipe list-gui-text: skips empty text", r.total >= 2 and allText, r.total)
+r = run("recipes/workspace-summary.lua", { top = 3 })
+check("recipe workspace-summary", r.totalInstances > 60 and #r.topClasses == 3 and r.topClasses[1].count >= r.topClasses[2].count, r.totalInstances)
+new("Sound", "Boom", { SoundId = "rbxassetid://1", Volume = 0.5, Playing = true, Looped = false }, H.nodes.workspace)
+new("Sound", "Quiet", { SoundId = "rbxassetid://2", Volume = 1, Playing = false, Looped = true }, H.nodes.workspace)
+r = run("recipes/list-sounds.lua", {})
+check("recipe list-sounds: all", r.total == 2, r.total)
+r = run("recipes/list-sounds.lua", { playing_only = true })
+check("recipe list-sounds: playing only", r.total == 1 and r.sounds[1].path == "Workspace.Boom", r.total)
+
 H.report()

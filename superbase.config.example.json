@@ -1,0 +1,13 @@
+{
+  "port": 9731,
+  "token": "",
+  "autostart": true,
+  "updateCheck": true,
+  "plain": false,
+  "clientUrl": "",
+  "recipesDir": "",
+  "pingMs": 10000,
+  "staleMs": 30000,
+  "screenshotMaxWidth": 1280,
+  "screenshotFocus": true
+}

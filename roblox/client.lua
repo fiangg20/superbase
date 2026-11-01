@@ -14,7 +14,14 @@ local CONFIG = {
     MaxResultLength = 60000,
     MaxDepth = 6,
     HistoryLines = 100,
-    Version = "1.3.0",
+    Version = "1.3.1",
+
+    -- Teleports: the executor forgets this script when the game moves you to another place. With
+    -- AutoReconnectOnTeleport the script asks the executor to load it again in the new place (queue_on_teleport),
+    -- so the AI stays connected. The bridge fills in LoaderUrl when you load the script from it with loadstring.
+    -- If you paste the file by hand, set LoaderUrl to the /client.lua address of your bridge yourself.
+    AutoReconnectOnTeleport = true,
+    LoaderUrl = "",
 
     -- Status notifications (small toasts in the top right corner).
     Notifications = true, -- connected, disconnected, bridge not found, rejected
@@ -64,6 +71,13 @@ for _, key in ipairs({ "__Superbase", "__DebugBridge" }) do
         pcall(genv[key].Stop)
         genv[key] = nil
     end
+end
+
+-- Set by the script that was queued before a teleport (see AutoReconnectOnTeleport).
+local resume = type(genv.__SuperbaseResume) == "table" and genv.__SuperbaseResume or nil
+genv.__SuperbaseResume = nil
+if resume and CONFIG.Token == "" and type(resume.token) == "string" then
+    CONFIG.Token = resume.token
 end
 
 local WebSocketApi = WebSocket or (syn and syn.websocket)
@@ -1007,6 +1021,7 @@ end
 -- "online" after a successful handshake, "offline" after the link was lost or never existed.
 -- It decides which toast to show, so a retry loop does not spam the screen.
 local linkState = nil
+local resumeAnnounced = false
 local rejectNotified = false
 
 local function handleMessage(raw)
@@ -1019,7 +1034,10 @@ local function handleMessage(raw)
         authenticated = true
         print("[Superbase] Connected and authenticated")
 
-        if linkState == "offline" then
+        if resume and not resumeAnnounced then
+            resumeAnnounced = true
+            notify("success", "Reconnected after teleport", "The AI can see the new place.", "link", "arrow-rotate-right")
+        elseif linkState == "offline" then
             notify("success", "Reconnected", "The AI can see this game again.", "link", "arrow-rotate-right")
         else
             notify("success", "Connected", "The AI can now see and debug this game.", "link")
@@ -1191,10 +1209,59 @@ local function stop()
     destroyUi()
 end
 
+-- Teleports ---------------------------------------------------------------------------------------------------
+
+local function findQueueOnTeleport()
+    return queue_on_teleport
+        or queueonteleport
+        or (syn and syn.queue_on_teleport)
+        or (fluxus and fluxus.queue_on_teleport)
+end
+
+local function setUpTeleportResume()
+    if not CONFIG.AutoReconnectOnTeleport then
+        return
+    end
+    local queue = findQueueOnTeleport()
+    if not queue then
+        warn("[Superbase] This executor has no queue_on_teleport, so the AI will disconnect when the game teleports you.")
+        return
+    end
+    if type(CONFIG.LoaderUrl) ~= "string" or CONFIG.LoaderUrl == "" then
+        warn("[Superbase] AutoReconnectOnTeleport needs LoaderUrl. Load the script with the loadstring line from the bridge, or set CONFIG.LoaderUrl.")
+        return
+    end
+
+    local code = string.format(
+        "getgenv().__SuperbaseResume = { token = %q }\nloadstring(game:HttpGet(%q))()",
+        CONFIG.Token,
+        CONFIG.LoaderUrl
+    )
+    local queued, queueError = pcall(queue, code)
+    if not queued then
+        warn("[Superbase] Could not queue the script for the next teleport: " .. tostring(queueError))
+        return
+    end
+
+    local player = Players.LocalPlayer
+    if player and player.OnTeleport then
+        table.insert(connections, player.OnTeleport:Connect(function(state)
+            if state == Enum.TeleportState.Started then
+                -- Tell the bridge this is a teleport, so the AI knows the client is coming back.
+                send({ type = "goodbye", reason = "teleport" })
+                notify("info", "Teleporting", "Superbase reconnects when the new place has loaded.", "teleport", "arrow-rotate-right")
+            end
+        end))
+    end
+end
+
+pcall(setUpTeleportResume)
+
 genv.__Superbase = { Stop = stop }
 print("[Superbase] Started, connecting to " .. CONFIG.Url)
 
-if CONFIG.Intro and CONFIG.Intro.Enabled then
+-- After a teleport the intro is skipped, the connection toast is enough.
+if CONFIG.Intro and CONFIG.Intro.Enabled and not resume then
     introActive = true
     task.spawn(function()
         local ok, err = pcall(playIntro)
