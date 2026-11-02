@@ -109,7 +109,7 @@ npm run setup
 npm start
 ```
 
-That is all. `npm run setup` installs the dependency, finds your AI clients and registers the MCP server in them. You do not need `npm install` or `npm start`: when the AI calls a tool and no bridge is running, the MCP server starts one in the background and tells the AI (and so you) that it did. At the end the setup prints the line to run in your executor, and offers to put the loader in your executor's autoexec folder, so the executor loads Superbase by itself in every game (see [Loader and autoexec](#loader-and-autoexec)).
+That is all. `npm run setup` installs the dependency, finds your AI clients and registers the MCP server in them. You do not need `npm install`: when the AI calls a tool and no bridge is running, the MCP server starts one in the background and tells the AI (and so you) that it did. At the end the setup prints the line to run in your executor, and offers to put the loader in your executor's autoexec folder, so the executor loads Superbase by itself in every game (see [Loader and autoexec](#loader-and-autoexec)).
 
 Restart your AI client once so it loads the change. If you want to watch the bridge in a terminal, `npm start` still works and prints this:
 
