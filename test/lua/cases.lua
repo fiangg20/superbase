@@ -206,6 +206,41 @@ r = run("remote_spy.lua", { action = "clear" }, spyEnv)
 check("spy: clear", r.buffered == 0)
 r = run("remote_spy.lua", { action = "start" }, {})
 check("spy: start twice does not hook twice", r.hooked == true)
+
+-- block / unblock
+run("remote_spy.lua", { action = "start" }, spyEnv)
+run("remote_spy.lua", { action = "clear" }, spyEnv)
+r = run("remote_spy.lua", { action = "block" }, spyEnv)
+check("spy block: needs remotes", r.error ~= nil and r.error:find("remotes") ~= nil, r.error)
+r = run("remote_spy.lua", { action = "block", remotes = { "Buy" } }, spyEnv)
+check("spy block: listed in status", r.blocked[1] == "Buy" and r.blockedCalls == 0, r.error)
+currentMethod = "FireServer"
+isOwn = false
+res = installed(H.nodes.buy, "x")
+check("spy block: the game's call never reaches the original", res == nil)
+res = installed(H.nodes.getData)
+check("spy block: other remotes still pass", res == "original")
+r = run("remote_spy.lua", { action = "get" }, spyEnv)
+check("spy block: the blocked call is recorded and marked", r.matched == 2 and r.calls[1].blocked == true and r.calls[2].blocked == nil and r.blockedCalls == 1, r.matched)
+isOwn = true
+res = installed(H.nodes.buy, "own")
+check("spy block: calls from Superbase itself pass", res == "original")
+run("remote_spy.lua", { action = "block", remotes = { "Buy" }, include_own = true }, spyEnv)
+res = installed(H.nodes.buy, "own")
+check("spy block: include_own blocks them too", res == nil)
+isOwn = false
+run("remote_spy.lua", { action = "unblock", remotes = { "Buy" } }, spyEnv)
+res = installed(H.nodes.buy, "x")
+check("spy unblock: the remote works again", res == "original")
+r = run("remote_spy.lua", { action = "block", remotes = { "ReplicatedStorage.GetData", "Nope" } }, spyEnv)
+check("spy block: full paths work", installed(H.nodes.getData) == nil and #r.blocked == 2)
+run("remote_spy.lua", { action = "stop" }, spyEnv)
+check("spy block: stays active when recording stops", installed(H.nodes.getData) == nil)
+r = run("remote_spy.lua", { action = "unblock" }, spyEnv)
+check("spy unblock: no names releases everything", #r.blocked == 0 and installed(H.nodes.getData) == "original")
+H.genv.__SuperbaseSpy = nil
+r = run("remote_spy.lua", { action = "block", remotes = { "Buy" } }, {})
+check("spy block: reports missing executor APIs", r.error and r.error:find("hookmetamethod") ~= nil, r.error)
 H.genv.__SuperbaseSpy = nil
 r = run("remote_spy.lua", { action = "start" }, {})
 check("spy: reports missing executor APIs", r.error and r.error:find("hookmetamethod") ~= nil, r.error)
@@ -280,6 +315,29 @@ r = run("character_control.lua", { action = "teleport", position = { x = 1, y = 
 check("character: position must be numeric", r.error ~= nil)
 r = run("character_control.lua", { action = "fly", position = { x = 1, y = 1, z = 1 } })
 check("character: unknown action", r.error ~= nil)
+
+-- teleport with a pivot that is 1.5 studs above the root part (like an R6 rig): the root must land on the target.
+local vectorMeta = {}
+local function vec(x, y, z) return setmetatable({ X = x, Y = y, Z = z }, vectorMeta) end
+vectorMeta.__sub = function(a, b) return vec(a.X - b.X, a.Y - b.Y, a.Z - b.Z) end
+vectorMeta.__add = function(a, b) return vec(a.X + b.X, a.Y + b.Y, a.Z + b.Z) end
+local rotationMeta = { __add = function(rot, v) return { X = v.X, Y = v.Y, Z = v.Z, kept = rot.rotation } end }
+local function pivotNow()
+    local p = rawget(bobRoot, "Position")
+    local pos = vec(p.X, p.Y + 1.5, p.Z)
+    return setmetatable({ Position = pos, rotation = "facing-east" }, { __sub = function(self) return setmetatable({ rotation = self.rotation }, rotationMeta) end })
+end
+rawset(bobModel, "GetPivot", pivotNow)
+H.env.Vector3 = { new = function(x, y, z) return vec(x, y, z) end }
+rawset(bobModel, "PivotTo", function(self, cf) rawset(bobRoot, "Position", { X = cf.X, Y = cf.Y - 1.5, Z = cf.Z }) rawset(self, "_lastKept", cf.kept) end)
+rawset(bobRoot, "Position", vec(0, 10, 0))
+r = run("character_control.lua", { action = "teleport", position = { x = 5, y = 20, z = 7 } })
+check("character: teleport puts the root part on the target", r.to.x == 5 and r.to.y == 20 and r.to.z == 7, r.error or r.to.y)
+check("character: teleport keeps the rotation", rawget(bobModel, "_lastKept") == "facing-east")
+rawset(bobModel, "GetPivot", nil)
+H.env.Vector3 = { new = function(x, y, z) return { __typeName = "Vector3", X = x, Y = y, Z = z } end }
+placeCharacter()
+rawset(bobRoot, "Position", { X = 0, Y = 10, Z = 0 })
 
 -- walk_to: the mock humanoid finishes the walk when MoveTo is called.
 local finishWalk = true
@@ -413,5 +471,278 @@ r = run("recipes/list-sounds.lua", {})
 check("recipe list-sounds: all", r.total == 2, r.total)
 r = run("recipes/list-sounds.lua", { playing_only = true })
 check("recipe list-sounds: playing only", r.total == 1 and r.sounds[1].path == "Workspace.Boom", r.total)
+
+-- dump_scripts ---------------------------------------------------------------
+r = run("dump_scripts.lua", {}, { decompile = function(inst) return rawget(inst, "Source") end })
+check("dump: pages cover the scripts sorted by path", r.total == 3 and r.nextOffset == nil and #r.scripts == 3 and r.scripts[1].path < r.scripts[2].path and r.scripts[2].path < r.scripts[3].path, r.total)
+check("dump: source and class are included", r.scripts[1].source ~= nil and r.scripts[1].className ~= nil and r.placeId ~= nil)
+r = run("dump_scripts.lua", { page_chars = 5000 }, { decompile = function() return string.rep("x", 4000) end })
+check("dump: a page stops at the character budget and names the next offset", #r.scripts == 2 and r.nextOffset == 2, #r.scripts)
+local cut = run("dump_scripts.lua", { max_script_chars = 500 }, { decompile = function() return string.rep("x", 4000) end })
+check("dump: long scripts are cut and marked", #cut.scripts[1].source == 500 and cut.scripts[1].truncated == true)
+local last = run("dump_scripts.lua", { offset = r.nextOffset }, { decompile = function() return "print(1)" end })
+check("dump: the next page continues where the last one stopped", #last.scripts == 1 and last.nextOffset == nil and last.offset == 2, #last.scripts)
+r = run("dump_scripts.lua", { class_name = "ModuleScript" }, { decompile = function(inst) return rawget(inst, "Source") end })
+check("dump: class filter", r.total == 1 and r.scripts[1].className == "ModuleScript", r.total)
+r = run("dump_scripts.lua", {}, { decompile = function() return "<!DOCTYPE html>error page" end })
+check("dump: a decompiler error page is replaced by the stored source", #r.scripts == 3 and not r.scripts[1].source:find("DOCTYPE", 1, true))
+r = run("dump_scripts.lua", { root = "game.Nope" }, {})
+check("dump: unknown root", r.error ~= nil)
+
+-- roblox/loader.lua ---------------------------------------------------------------
+local ran, waits, warnings = {}, 0, {}
+local function loaderEnv(extra)
+    local env = {
+        task = {
+            spawn = function(fn) fn() end,
+            wait = function() waits = waits + 1 if waits > 20 then error("the loader never stopped retrying") end end,
+        },
+        warn = function(text) warnings[#warnings + 1] = text end,
+        loadstring = function(source) return function() ran[#ran + 1] = source end end,
+    }
+    for k, v in pairs(extra or {}) do env[k] = v end
+    return env
+end
+local function resetLoader()
+    ran, waits, warnings = {}, 0, {}
+    H.genv.__SuperbaseLoaderRunning = nil
+end
+
+resetLoader()
+rawset(H.game, "HttpGet", function(self, url) ran[#ran + 1] = "GET " .. url return "client-source" end)
+run("roblox/loader.lua", {}, loaderEnv())
+check("loader: HttpGet is tried first and its source is run", ran[1] == "GET http://127.0.0.1:9731/client.lua" and ran[2] == "client-source", ran[1])
+check("loader: the running flag is cleared when done", H.genv.__SuperbaseLoaderRunning == nil)
+
+resetLoader()
+rawset(H.game, "HttpGet", function() error("HttpGet is blocked") end)
+run("roblox/loader.lua", {}, loaderEnv({ request = function(options)
+    ran[#ran + 1] = options.Method .. " " .. options.Url
+    return { StatusCode = 200, Body = "from-request" }
+end }))
+check("loader: request is used when HttpGet is blocked", ran[1] == "GET http://127.0.0.1:9731/client.lua" and ran[2] == "from-request", ran[2])
+
+resetLoader()
+run("roblox/loader.lua", {}, loaderEnv({
+    request = function() error("first one is broken") end,
+    http_request = function() return { Status = 200, body = "from-second" } end,
+}))
+check("loader: the next request function is tried and Status/body spellings work", ran[1] == "from-second", ran[1])
+
+resetLoader()
+local tries = 0
+run("roblox/loader.lua", {}, loaderEnv({ request = function()
+    tries = tries + 1
+    if tries < 3 then return { StatusCode = 502, Body = "" } end
+    return { StatusCode = 200, Body = "finally" }
+end }))
+check("loader: retries until the bridge answers", ran[1] == "finally" and waits == 2, waits)
+check("loader: the same problem is reported once", #warnings == 1 and warnings[1]:find("status 502") ~= nil, #warnings)
+
+resetLoader()
+run("roblox/loader.lua", {}, loaderEnv({ syn = { request = function() return { StatusCode = 200, Body = "syn" } end } }))
+check("loader: syn.request works", ran[1] == "syn")
+
+resetLoader()
+local okStuck = pcall(run, "roblox/loader.lua", {}, loaderEnv({ loadstring = false }))
+check("loader: without loadstring it warns and keeps waiting", okStuck == false and warnings[1] and warnings[1]:find("no loadstring") ~= nil, warnings[1])
+
+resetLoader()
+H.genv.__SuperbaseLoaderRunning = true
+run("roblox/loader.lua", {}, loaderEnv())
+check("loader: a second copy does not start another loop", #ran == 0)
+resetLoader()
+rawset(H.game, "HttpGet", nil)
+
+
+-- roblox/client.lua: polling transport ------------------------------------------------
+do
+    local f = assert(io.open("roblox/client.lua", "r"))
+    local source = f:read("*a")
+    f:close()
+    local section = source:match("%-%- BEGIN POLLING TRANSPORT(.-)%-%- END POLLING TRANSPORT")
+    check("polling: the section is found in client.lua", section ~= nil)
+    local factory = assert(load(section .. "\nreturn createPollingApi", "=polling", "t", setmetatable({}, { __index = _G })))()
+
+    -- A small scheduler: spawn starts a coroutine, step resumes whatever is waiting.
+    local tasks = {}
+    local function spawn(fn, ...)
+        local co = coroutine.create(fn)
+        tasks[#tasks + 1] = co
+        assert(coroutine.resume(co, ...))
+    end
+    local function step()
+        for _, co in ipairs({ table.unpack(tasks) }) do
+            if coroutine.status(co) == "suspended" then assert(coroutine.resume(co)) end
+        end
+    end
+    local function json(value) return value end -- the fake request works on tables directly
+
+    local log, serverQueue, script = {}, {}, {}
+    local function fakeRequest(options)
+        local path = options.Url:match("^https?://127%.0%.0%.1:9731(.*)$")
+        local entry = { url = options.Url, method = options.Method, path = path, headers = options.Headers, body = options.Body }
+        log[#log + 1] = entry
+        if path:find("^/poll/next") and coroutine.isyieldable() then coroutine.yield() end
+        local handler = script[path:match("^[^?]+")]
+        if type(handler) == "function" then return handler(entry) end
+        return { StatusCode = 200, Body = "{}" }
+    end
+    local function make(overrides)
+        local deps = {
+            request = fakeRequest, spawn = spawn, wait = function() if coroutine.isyieldable() then coroutine.yield() end end, waitMs = 10000,
+            encode = function(value) return "ENC:" .. tostring(#(value.messages or {})) .. ":" .. tostring(value.userName or "") end,
+            decode = function(text)
+                if text == "HELLO" then return { type = "hello", token = "tok", userName = "Bob" } end
+                if text == "BADHELLO" then return "nope" end
+                local list = text:match("^MSGS:(.*)$")
+                if list then
+                    local out = { messages = {} }
+                    for item in list:gmatch("[^,]+") do if item == "CLOSED" then out.closed = true else out.messages[#out.messages + 1] = item end end
+                    return out
+                end
+                if text:find("^SESSION") then return { session = "s1" } end
+                if text == "{}" then return {} end
+                error("cannot decode " .. text)
+            end,
+        }
+        for k, v in pairs(overrides or {}) do deps[k] = v end
+        return factory(deps)
+    end
+    local function reset()
+        tasks, log, serverQueue, script = {}, {}, {}, {}
+    end
+
+    -- connect: reachability is any HTTP answer, a thrown request means the bridge is not there.
+    reset()
+    local api = make()
+    local socket = api.connect("ws://127.0.0.1:9731", "")
+    check("polling: connect probes /status over http with the client header", log[1].method == "GET" and log[1].path == "/status" and log[1].headers["x-superbase-client"] == "roblox", log[1].path)
+    check("polling: no token header when the token is empty", log[1].headers["x-bridge-token"] == nil)
+    check("polling: socket looks like a WebSocket", type(socket.Send) == "function" and type(socket.Close) == "function" and socket.OnMessage.Connect ~= nil and socket.OnClose.Connect ~= nil)
+    reset()
+    script["/status"] = function() return { StatusCode = 401, Body = "{}" } end
+    check("polling: a 401 still means the bridge is there", pcall(make().connect, "ws://127.0.0.1:9731", ""))
+    reset()
+    local deadApi = make({ request = function() error("connection refused") end })
+    local okDead, errDead = pcall(deadApi.connect, "ws://127.0.0.1:9731", "")
+    check("polling: an unreachable bridge raises the reason", okDead == false and tostring(errDead):find("connection refused", 1, true) ~= nil, errDead)
+
+    reset()
+    make().connect("ws://127.0.0.1:9731/", "")
+    check("polling: ws becomes http and a trailing slash goes", log[1].url == "http://127.0.0.1:9731/status", log[1].url)
+    reset()
+    make().connect("wss://127.0.0.1:9731", "")
+    check("polling: wss becomes https", log[1].url == "https://127.0.0.1:9731/status", log[1].url)
+
+    -- A full session: hello, welcome through the poll, messages out, close.
+    reset()
+    script["/poll/hello"] = function() return { StatusCode = 200, Body = "SESSION" } end
+    script["/poll/next"] = function() local body = serverQueue[1] and table.remove(serverQueue, 1) or "MSGS:" return { StatusCode = 200, Body = body } end
+    script["/poll/send"] = function() return { StatusCode = 200, Body = "{}" } end
+    socket = make().connect("wss://127.0.0.1:9731", "tok")
+    check("polling: the token travels in a header", log[1].headers["x-bridge-token"] == "tok")
+    local received, closedFired = {}, 0
+    socket.OnMessage:Connect(function(text) received[#received + 1] = text end)
+    socket.OnClose:Connect(function() closedFired = closedFired + 1 end)
+    serverQueue[1] = "MSGS:welcome-text,second"
+    socket:Send("HELLO")
+    local hello
+    for _, entry in ipairs(log) do if entry.path == "/poll/hello" then hello = entry end end
+    check("polling: the hello opens the session", hello ~= nil and hello.method == "POST" and hello.headers["x-bridge-token"] == "tok", hello and hello.path)
+    check("polling: the token is taken out of the hello body", hello and hello.body == "ENC:0:Bob")
+    local poll
+    for _, entry in ipairs(log) do if entry.path:find("^/poll/next") then poll = entry end end
+    check("polling: the poll names the session and the wait", poll and poll.path == "/poll/next?session=s1&wait=10000", poll and poll.path)
+    step()
+    check("polling: messages from the bridge reach OnMessage in order", received[1] == "welcome-text" and received[2] == "second", table.concat(received, "|"))
+
+    -- Sending: queued messages go out in one batch per flush.
+    socket:Send("a")
+    socket:Send("b")
+    local sends = 0
+    for _, entry in ipairs(log) do if entry.path == "/poll/send?session=s1" then sends = sends + 1 end end
+    check("polling: sends go to /poll/send with the session", sends >= 1, sends)
+
+    -- Closing by the bridge ends the loops and fires OnClose once.
+    serverQueue[1] = "MSGS:CLOSED"
+    step()
+    step()
+    check("polling: closed:true from the bridge fires OnClose once", closedFired == 1, closedFired)
+    check("polling: sending on a closed socket raises", pcall(socket.Send, socket, "late") == false)
+
+    -- An unknown session (404) closes too.
+    reset()
+    script["/poll/hello"] = function() return { StatusCode = 200, Body = "SESSION" } end
+    script["/poll/next"] = function() return { StatusCode = 404, Body = "{}" } end
+    socket = make().connect("ws://127.0.0.1:9731", "")
+    closedFired = 0
+    socket.OnClose:Connect(function() closedFired = closedFired + 1 end)
+    socket:Send("HELLO")
+    step()
+    check("polling: a 404 on the poll closes the socket", closedFired == 1, closedFired)
+
+    -- A refused hello closes the socket.
+    reset()
+    script["/poll/hello"] = function() return { StatusCode = 401, Body = "{}" } end
+    socket = make().connect("ws://127.0.0.1:9731", "")
+    closedFired = 0
+    socket.OnClose:Connect(function() closedFired = closedFired + 1 end)
+    socket:Send("HELLO")
+    check("polling: a 401 on the hello closes the socket", closedFired == 1, closedFired)
+    local pollsAfterRefusal = 0
+    for _, entry in ipairs(log) do if entry.path:find("^/poll/next") then pollsAfterRefusal = pollsAfterRefusal + 1 end end
+    check("polling: no polling starts after a refused hello", pollsAfterRefusal == 0)
+
+    reset()
+    socket = make().connect("ws://127.0.0.1:9731", "")
+    closedFired = 0
+    socket.OnClose:Connect(function() closedFired = closedFired + 1 end)
+    socket:Send("BADHELLO")
+    check("polling: an unreadable hello closes the socket", closedFired == 1, closedFired)
+
+    -- Repeated failures close the socket, a single one does not.
+    reset()
+    local failing = 0
+    script["/poll/hello"] = function() return { StatusCode = 200, Body = "SESSION" } end
+    script["/poll/next"] = function() failing = failing + 1 if failing <= 2 then error("timeout") end return { StatusCode = 200, Body = "MSGS:hi" } end
+    socket = make().connect("ws://127.0.0.1:9731", "")
+    received, closedFired = {}, 0
+    socket.OnMessage:Connect(function(text) received[#received + 1] = text end)
+    socket.OnClose:Connect(function() closedFired = closedFired + 1 end)
+    socket:Send("HELLO")
+    for _ = 1, 6 do step() end
+    check("polling: two failed polls are survived", received[1] == "hi" and closedFired == 0, closedFired)
+    reset()
+    script["/poll/hello"] = function() return { StatusCode = 200, Body = "SESSION" } end
+    script["/poll/next"] = function() error("down") end
+    socket = make().connect("ws://127.0.0.1:9731", "")
+    closedFired = 0
+    socket.OnClose:Connect(function() closedFired = closedFired + 1 end)
+    socket:Send("HELLO")
+    for _ = 1, 12 do step() end
+    check("polling: three failed polls in a row close the socket", closedFired == 1, closedFired)
+
+    -- Close() tells the bridge and stops everything.
+    reset()
+    script["/poll/hello"] = function() return { StatusCode = 200, Body = "SESSION" } end
+    socket = make().connect("ws://127.0.0.1:9731", "")
+    socket:Send("HELLO")
+    socket:Close()
+    socket:Close()
+    local closes = 0
+    for _, entry in ipairs(log) do if entry.path == "/poll/close?session=s1" then closes = closes + 1 end end
+    check("polling: Close posts /poll/close once", closes == 1, closes)
+end
+
+-- roblox/client.lua: transport choice and settings ---------------------------------------
+do
+    local f = assert(io.open("roblox/client.lua", "r"))
+    local source = f:read("*a")
+    f:close()
+    check("client: Transport and PollWait are settings", source:find('Transport = "auto"', 1, true) ~= nil and source:find("PollWait = 10", 1, true) ~= nil)
+    check("client: no early return for a missing WebSocket", source:find('does not expose WebSocket.connect', 1, true) == nil)
+    check("client: the request functions are looked up", source:find("fluxus and fluxus.request", 1, true) ~= nil and source:find("syn and syn.request", 1, true) ~= nil)
+end
 
 H.report()

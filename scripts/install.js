@@ -12,7 +12,7 @@
 //   node scripts/install.js --uninstall
 //
 // Options: --client a,b  --file <path> [--key mcpServers] [--shape standard|vscode|opencode]
-//          --port <n>  --node <command>  --print  --help
+//          --port <n>  --node <command>  --autoexec  --no-autoexec  --print  --help
 
 const fs = require("fs");
 const os = require("os");
@@ -20,6 +20,8 @@ const path = require("path");
 const readline = require("readline");
 const { spawnSync } = require("child_process");
 const { supportsUnicode, makeUi, banner, shorten } = require("../src/terminal");
+const { loadSettings, connectHost } = require("../src/config");
+const { oneLiner } = require("../src/loader");
 
 const ROOT = path.join(__dirname, "..");
 const SERVER_FILE = path.join(ROOT, "src", "mcp-server.js");
@@ -355,6 +357,8 @@ Options
                     and --shape (standard, vscode or opencode, default standard)
   --port <n>        port of the bridge, when it is not 9731
   --node <command>  the command that starts Node.js (default: node)
+  --autoexec        also put the loader in your executor's autoexec folder (the executor must be connected, see "npm run autoexec")
+  --no-autoexec     do not offer the autoexec step
   --no-deps         do not run "npm install" when the dependency is missing
   --plain           no colors and no interactive picker, just plain lines
   --print           print the config to add by hand and exit
@@ -363,7 +367,7 @@ Options
 Every file is copied to <name>.superbase-backup-<time> before it changes.`;
 
 function parseArgs(argv) {
-  const options = { yes: false, dryRun: false, uninstall: false, list: false, print: false, help: false, clients: null, file: null, key: "mcpServers", shape: "standard", port: null, node: "node", noDeps: false, plain: false };
+  const options = { yes: false, dryRun: false, uninstall: false, list: false, print: false, help: false, clients: null, file: null, key: "mcpServers", shape: "standard", port: null, node: "node", noDeps: false, plain: false, autoexec: false, noAutoexec: false };
   const errors = [];
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -379,6 +383,8 @@ function parseArgs(argv) {
     else if (arg === "--print") options.print = true;
     else if (arg === "--no-deps") options.noDeps = true;
     else if (arg === "--plain") options.plain = true;
+    else if (arg === "--autoexec") options.autoexec = true;
+    else if (arg === "--no-autoexec") options.noAutoexec = true;
     else if (arg === "--help" || arg === "-h") options.help = true;
     else if (arg === "--client") options.clients = String(value() || "").split(",").map((s) => s.trim()).filter(Boolean);
     else if (arg === "--file") options.file = value();
@@ -554,6 +560,7 @@ async function run(argv, ctx = {}) {
     which: ctx.which,
     exec: ctx.exec,
     ensureDeps: ctx.ensureDeps,
+    autoexec: ctx.autoexec,
     interactive: ctx.interactive !== undefined ? ctx.interactive : Boolean(process.stdin.isTTY),
     input: ctx.input,
     output: ctx.output,
@@ -747,20 +754,49 @@ async function run(argv, ctx = {}) {
   const changed = results.filter((item) => ["added", "updated", "removed"].includes(item.result.status)).length;
   const registered = mode === "install" && !options.dryRun && results.some((item) => ["added", "updated", "unchanged"].includes(item.result.status));
   out("");
+
+  // Optional: the loader in the autoexec folder of the executor, so nobody has to paste it in every game.
+  const settings = { ...loadSettings(context.env), ...(options.port ? { port: options.port } : {}) };
+  let autoexecDone = false;
+  if (registered && !options.noAutoexec) {
+    let wanted = options.autoexec;
+    if (!wanted && context.interactive && !options.yes) {
+      const answer = await ask("Start Superbase by itself in your executor (autoexec)? Your executor has to be open and connected for this. [y/N]: ", context);
+      wanted = /^(y|yes)$/i.test(answer);
+    }
+    if (wanted) {
+      const runAutoexec = context.autoexec || require("../src/autoexec").run;
+      const answered = context.interactive ? (question) => ask(question, context) : null;
+      const outcome = await runAutoexec({ waitSeconds: context.interactive ? 120 : 0 }, { env: context.env, settings, out: (line) => out(`  ${line}`), ask: answered });
+      autoexecDone = Boolean(outcome && outcome.ok);
+      out("");
+    }
+  }
+
   if (fancy && registered) {
     out(`  ${ui.bold("Next")}`);
     out(`    ${ui.cyan("1")}  Restart the AI client so it loads the change`);
-    out(`    ${ui.cyan("2")}  Start the bridge:  ${ui.cyan("npm start")}`);
+    if (autoexecDone) {
+      out(`    ${ui.cyan("2")}  Your executor loads Superbase by itself from now on`);
+    } else {
+      out(`    ${ui.cyan("2")}  Run this in your executor, inside a game:`);
+      out(`         ${ui.cyan(oneLiner(settings.port, connectHost(settings.host), settings.token))}`);
+    }
     out(`    ${ui.cyan("3")}  Ask the AI: ${ui.dim('"Check the Roblox connection."')}`);
+    out(`       ${ui.dim("The bridge starts by itself when the AI needs it. No npm start.")}`);
+    if (!autoexecDone) out(`       ${ui.dim("Run it automatically in every game: npm run autoexec")}`);
     out("");
   } else if (!fancy) {
     if (changed > 0) out("Restart the AI client so it loads the change.");
-    if (registered) out("Then start the bridge (npm start) and ask the AI to check the Roblox connection.");
+    if (registered) {
+      if (!autoexecDone) out(`Then run this in your executor, inside a game: ${oneLiner(settings.port, connectHost(settings.host), settings.token)}`);
+      out("The bridge starts by itself when the AI needs it. Ask the AI to check the Roblox connection.");
+    }
   } else if (changed > 0) {
     out(`  ${ui.dim("Restart the AI client so it loads the change.")}`);
     out("");
   }
-  return { code: failed ? 1 : 0, results, dependencies: deps };
+  return { code: failed ? 1 : 0, results, dependencies: deps, autoexec: autoexecDone };
 }
 
 module.exports = { selectMany, makeUi, buildClients, buildEntry, locate, run, parseArgs, tomlBlock, tomlWithout, tomlHasOwn, readJson, SERVER_FILE };

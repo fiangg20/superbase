@@ -12,9 +12,11 @@ const path = require("path");
 
 const ROOT = path.join(__dirname, "..");
 const DEFAULT_PORT = 9731;
+const DEFAULT_HOST = "127.0.0.1";
 
 // key: [type, check, env variables, default]
 const SPEC = {
+  host: ["string", (v) => /^[A-Za-z0-9.:\-\[\]]+$/.test(v), ["SUPERBASE_HOST"], DEFAULT_HOST],
   port: ["integer", (v) => v >= 1 && v <= 65535, ["SUPERBASE_PORT", "BRIDGE_PORT"], DEFAULT_PORT],
   token: ["string", () => true, ["SUPERBASE_TOKEN", "BRIDGE_TOKEN"], ""],
   clientUrl: ["string", () => true, ["SUPERBASE_CLIENT_URL"], ""],
@@ -26,7 +28,24 @@ const SPEC = {
   recipesDir: ["string", () => true, ["SUPERBASE_RECIPES"], ""],
   screenshotMaxWidth: ["integer", (v) => v >= 320 && v <= 1920, ["SUPERBASE_SCREENSHOT_WIDTH"], 1280],
   screenshotFocus: ["boolean", () => true, ["SUPERBASE_SCREENSHOT_FOCUS"], true],
+  ollamaUrl: ["string", (v) => /^https?:\/\/\S+$/.test(v), ["SUPERBASE_OLLAMA_URL"], "http://127.0.0.1:11434"],
+  embedModel: ["string", (v) => v.trim() !== "", ["SUPERBASE_EMBED_MODEL"], "embeddinggemma"],
 };
+
+// Address helpers. "host" is where the bridge listens and where the MCP server and the loader look for it.
+// 0.0.0.0 and :: mean "every network card" for the bridge, and "this computer" for anything connecting to it.
+const unbracket = (host) => String(host).replace(/^\[|\]$/g, "");
+const isLoopbackHost = (host) => /^(localhost|::1|127(\.\d{1,3}){3})$/i.test(unbracket(host));
+const isWildcardHost = (host) => /^(0\.0\.0\.0|::)$/.test(unbracket(host));
+// The bridge runs on this computer (or is meant to), so it can be started and inspected from here.
+const isLocalHost = (host) => isLoopbackHost(host) || isWildcardHost(host);
+// Listening on anything but loopback lets other computers reach the bridge, so a token is required.
+const isExposedHost = (host) => !isLoopbackHost(host);
+// The address to put in a URL that connects to the bridge.
+function connectHost(host) {
+  const bare = isWildcardHost(host) ? (unbracket(host) === "::" ? "::1" : DEFAULT_HOST) : unbracket(host);
+  return bare.includes(":") ? `[${bare}]` : bare;
+}
 
 function parseValue(type, raw) {
   if (type === "string") return typeof raw === "string" ? raw : undefined;
@@ -113,4 +132,7 @@ function stateDir(env = process.env, root = ROOT) {
   return env.SUPERBASE_HOME ? path.resolve(env.SUPERBASE_HOME) : path.join(root, ".superbase");
 }
 
-module.exports = { loadSettings, stateDir, configPath, SPEC, ROOT, DEFAULT_PORT };
+module.exports = {
+  loadSettings, stateDir, configPath, SPEC, ROOT, DEFAULT_PORT, DEFAULT_HOST,
+  isLoopbackHost, isWildcardHost, isLocalHost, isExposedHost, connectHost, unbracket,
+};

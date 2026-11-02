@@ -382,7 +382,7 @@ async function main() {
     const input = Object.assign(new EventEmitter(), { setRawMode() {}, resume() {}, pause() {}, setEncoding() {} });
     let screen = "";
     const { ctx, lines } = context(home, { interactive: true, fancy: true, input, output: { write: (text) => { screen += text; }, columns: 100 } });
-    const pending = run([], ctx);
+    const pending = run(["--no-autoexec"], ctx);
     input.emit("data", "\x1b[B");
     input.emit("data", " ");
     input.emit("data", "\r");
@@ -392,7 +392,7 @@ async function main() {
     assert.ok(readJson(path.join(home, ".cursor", "mcp.json")).mcpServers.superbase);
     assert.ok(!fs.existsSync(path.join(home, ".kiro", "settings", "mcp.json")), "the unticked client is not touched");
     const text = lines.join("\n");
-    assert.ok(text.includes("Dependencies") && text.includes("Cursor") && text.includes("npm start"), text);
+    assert.ok(text.includes("Dependencies") && text.includes("Cursor") && text.includes("loadstring(game:HttpGet("), text);
 
     // Cancel changes nothing.
     const home2 = fakeHome();
@@ -402,6 +402,49 @@ async function main() {
     input2.emit("data", "q");
     await pending2;
     assert.ok(!fs.existsSync(path.join(home2, ".cursor", "mcp.json")));
+  }
+
+  // The autoexec step: only when asked for, with the loader line in the next steps otherwise.
+  {
+    const home = fakeHome();
+    fs.mkdirSync(path.join(home, ".cursor"));
+    const calls = [];
+    const stub = async (options, deps) => {
+      calls.push({ options, port: deps.settings.port, hasAsk: typeof deps.ask });
+      deps.out("Wrote /fake/autoexec/superbase-loader.lua");
+      return { ok: true, status: "written" };
+    };
+
+    // Not asked for: not run, and the loader line is shown.
+    let { ctx, lines } = context(home, { autoexec: stub });
+    let result = await run(["--yes"], ctx);
+    assert.strictEqual(calls.length, 0, "autoexec is never run without being asked");
+    assert.strictEqual(result.autoexec, false);
+    assert.ok(lines.join("\n").includes('loadstring(game:HttpGet("http://127.0.0.1:9731/client.lua"))()'), lines.join("\n"));
+    assert.ok(!lines.join("\n").includes("npm start"), "the bridge starts by itself, so npm start is not asked for");
+
+    // --autoexec runs it with the port and does not wait in a script.
+    ({ ctx, lines } = context(home, { autoexec: stub }));
+    result = await run(["--yes", "--autoexec", "--port", "9800"], ctx);
+    assert.strictEqual(calls.length, 1);
+    assert.deepStrictEqual({ wait: calls[0].options.waitSeconds, port: calls[0].port, ask: calls[0].hasAsk }, { wait: 0, port: 9800, ask: "object" });
+    assert.strictEqual(result.autoexec, true);
+    assert.ok(lines.join("\n").includes("Wrote /fake/autoexec/superbase-loader.lua"));
+    assert.ok(!lines.join("\n").includes("loadstring(game:HttpGet"), "no loader line to paste when autoexec is set up");
+
+    // A failed autoexec step does not fail the setup, and the loader line is shown.
+    ({ ctx, lines } = context(home, { autoexec: async () => ({ ok: false, status: "manual-needed" }) }));
+    result = await run(["--yes", "--autoexec"], ctx);
+    assert.strictEqual(result.code, 0);
+    assert.strictEqual(result.autoexec, false);
+    assert.ok(lines.join("\n").includes("loadstring(game:HttpGet"));
+
+    // --no-autoexec wins, and a dry run or an uninstall never touches the executor.
+    ({ ctx } = context(home, { autoexec: stub }));
+    await run(["--yes", "--autoexec", "--no-autoexec"], ctx);
+    await run(["--yes", "--autoexec", "--dry-run"], ctx);
+    await run(["--yes", "--autoexec", "--uninstall"], ctx);
+    assert.strictEqual(calls.length, 1);
   }
 
   // package.json has the npm commands.

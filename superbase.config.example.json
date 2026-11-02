@@ -1,4 +1,5 @@
 {
+  "host": "127.0.0.1",
   "port": 9731,
   "token": "",
   "autostart": true,
@@ -9,5 +10,7 @@
   "pingMs": 10000,
   "staleMs": 30000,
   "screenshotMaxWidth": 1280,
-  "screenshotFocus": true
+  "screenshotFocus": true,
+  "ollamaUrl": "http://127.0.0.1:11434",
+  "embedModel": "embeddinggemma"
 }

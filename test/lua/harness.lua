@@ -193,7 +193,7 @@ env.getconnections = function(signal)
 end
 
 local function run(file, args, overrides)
-    local f = assert(io.open(file:match("^recipes/") and file or (SNIPPETS .. file), "r"))
+    local f = assert(io.open((file:match("^recipes/") or file:match("^roblox/")) and file or (SNIPPETS .. file), "r"))
     local src = f:read("*a")
     f:close()
     local scope = setmetatable({}, { __index = env })

@@ -6,7 +6,7 @@ const assert = require("assert");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { loadSettings, stateDir, SPEC } = require("../src/config");
+const { loadSettings, stateDir, SPEC, isLoopbackHost, isWildcardHost, isLocalHost, isExposedHost, connectHost } = require("../src/config");
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "superbase-config-"));
 const file = path.join(dir, "superbase.config.json");
@@ -85,6 +85,23 @@ assert.strictEqual(loadSettings({ SUPERBASE_CONFIG: "off" }, dir).file, null);
 // A short token is flagged.
 write({ token: "short" });
 assert.ok(loadSettings({}, dir).warnings.some((warning) => warning.includes("shorter than 16")));
+
+// The host setting and its helpers.
+assert.strictEqual(loadSettings({ SUPERBASE_CONFIG: "none" }, dir).host, "127.0.0.1");
+assert.strictEqual(loadSettings({ SUPERBASE_CONFIG: "none", SUPERBASE_HOST: "192.168.1.20" }, dir).host, "192.168.1.20");
+s = loadSettings({ SUPERBASE_CONFIG: "none", SUPERBASE_HOST: "bad host/x" }, dir);
+assert.strictEqual(s.host, "127.0.0.1");
+assert.ok(s.warnings.some((warning) => warning.includes("SUPERBASE_HOST")), "a bad host is reported");
+for (const host of ["127.0.0.1", "localhost", "::1", "[::1]", "127.1.2.3"]) assert.ok(isLoopbackHost(host), host);
+for (const host of ["0.0.0.0", "::", "192.168.1.5", "pc.lan"]) assert.ok(!isLoopbackHost(host), host);
+assert.ok(isWildcardHost("0.0.0.0") && isWildcardHost("::") && !isWildcardHost("127.0.0.1"));
+assert.ok(isLocalHost("0.0.0.0") && isLocalHost("localhost") && !isLocalHost("192.168.1.5"));
+assert.ok(isExposedHost("0.0.0.0") && isExposedHost("192.168.1.5") && !isExposedHost("127.0.0.1"));
+assert.strictEqual(connectHost("0.0.0.0"), "127.0.0.1");
+assert.strictEqual(connectHost("::"), "[::1]");
+assert.strictEqual(connectHost("192.168.1.5"), "192.168.1.5");
+assert.strictEqual(connectHost("fe80::1"), "[fe80::1]");
+assert.strictEqual(connectHost("[::1]"), "[::1]");
 
 // The state folder.
 assert.strictEqual(stateDir({}, dir), path.join(dir, ".superbase"));

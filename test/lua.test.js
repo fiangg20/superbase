@@ -69,7 +69,7 @@ const snippetFiles = fs
   .readdirSync(LUA_DIR)
   .filter((name) => name.endsWith(".lua"))
   .map((name) => path.join(LUA_DIR, name));
-const files = [...snippetFiles, path.join(ROOT, "roblox", "client.lua")];
+const files = [...snippetFiles, path.join(ROOT, "roblox", "client.lua"), path.join(ROOT, "roblox", "loader.lua")];
 
 for (const file of files) {
   const source = fs.readFileSync(file, "utf8");

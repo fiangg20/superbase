@@ -99,7 +99,7 @@ try {
 
 Write-Host ''
 Say "Superbase is in $Dir"
-Say "Start the bridge with:  cd ""$Dir""; npm start"
+Say 'The bridge starts by itself when your AI needs it. To watch it in a terminal: npm start (in that folder).'
 if ($env:SUPERBASE_START -eq '1') {
   Say 'Starting the bridge...'
   Push-Location $Dir

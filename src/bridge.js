@@ -8,7 +8,8 @@
 //   send commands to a game, take screenshots and check the connection.
 // - Serves roblox/client.lua at /client.lua so the executor can load it with loadstring,
 //   and a small dashboard at /.
-// Everything binds to 127.0.0.1.
+// By default everything binds to 127.0.0.1. With the "host" setting (SUPERBASE_HOST) the bridge can listen on a
+// network address instead, so the executor, the bridge and the AI can run on different computers. That needs a token.
 //
 // Two modes:
 // - Open mode (default): no token. Web pages are still blocked: the Host and Origin headers
@@ -22,10 +23,11 @@ const http = require("http");
 const path = require("path");
 const crypto = require("crypto");
 const terminal = require("./terminal");
-const { loadSettings, ROOT } = require("./config");
+const { loadSettings, ROOT, isExposedHost, unbracket, connectHost } = require("./config");
 const background = require("./background");
 const updateCheck = require("./update-check");
 const recipes = require("./recipes");
+const { PollHub } = require("./poll-transport");
 const { captureRobloxWindow, ScreenshotError } = require("./screenshot");
 
 let WebSocketServer;
@@ -39,9 +41,11 @@ try {
   process.exit(1);
 }
 
-const VERSION = "1.3.1";
-const HOST = "127.0.0.1";
+const VERSION = "1.3.2";
 const settings = loadSettings(process.env);
+const HOST = unbracket(settings.host); // what the server binds to
+const EXPOSED = isExposedHost(HOST); // other computers can reach it
+const SHOWN_HOST = connectHost(settings.host); // what to put in a URL on this computer
 const PORT = settings.port;
 const TOKEN = settings.token;
 const OPEN_MODE = TOKEN === "";
@@ -92,6 +96,13 @@ const DASHBOARD_FILES = new Map([
   ["/fonts/BuilderIcons-Filled.ttf", { file: path.join(FONT_DIR, "BuilderIcons-Filled.ttf"), type: "font/ttf", cache: "max-age=3600" }],
 ]);
 
+if (EXPOSED && OPEN_MODE) {
+  console.error(`The bridge would listen on ${HOST}, which other computers can reach, and it has no token.`);
+  console.error("Set BRIDGE_TOKEN (16 characters or more) first, or use host 127.0.0.1. Generate a token with:");
+  console.error("node -e \"console.log(require('crypto').randomBytes(24).toString('hex'))\"");
+  process.exit(1);
+}
+
 if (!OPEN_MODE && (TOKEN === "PASTE_YOUR_TOKEN_HERE" || TOKEN.length < 16)) {
   console.error("BRIDGE_TOKEN must be at least 16 characters. Unset it to use open mode, or generate one with:");
   console.error("node -e \"console.log(require('crypto').randomBytes(24).toString('hex'))\"");
@@ -112,19 +123,35 @@ function findClientScript() {
   return CLIENT_SCRIPT_CANDIDATES.find((candidate) => fs.existsSync(candidate)) || null;
 }
 
-// The script served to the executor always points at this bridge's own port.
-function readClientScript() {
+// A string literal for Lua, safe for any token.
+function luaString(text) {
+  let out = "";
+  for (const byte of Buffer.from(String(text), "utf8")) {
+    out += byte >= 0x20 && byte <= 0x7e && byte !== 0x22 && byte !== 0x5c ? String.fromCharCode(byte) : `\\${String(byte).padStart(3, "0")}`;
+  }
+  return `"${out}"`;
+}
+
+// The script served to the executor points at this bridge. A client on another computer gets the address it
+// used to reach the bridge (the Host header). In token mode the token is only served to a caller that has it.
+function readClientScript(hostHeader, token) {
   const file = findClientScript();
   if (!file) return null;
+  const address = EXPOSED && typeof hostHeader === "string" && /^[A-Za-z0-9.:\-\[\]]+$/.test(hostHeader) ? hostHeader : `${SHOWN_HOST}:${PORT}`;
+  const loaderUrl = `http://${address}/client.lua${token ? `?token=${encodeURIComponent(token)}` : ""}`;
   // The client also gets the address it was loaded from, so it can load itself again after a teleport.
-  return fs
+  let script = fs
     .readFileSync(file, "utf8")
-    .replace(/Url = "ws:\/\/[^"]*"/, `Url = "ws://${HOST}:${PORT}"`)
-    .replace(/LoaderUrl = "[^"]*"/, `LoaderUrl = "http://${HOST}:${PORT}/client.lua"`);
+    .replace(/Url = "ws:\/\/[^"]*"/, () => `Url = "ws://${address}"`)
+    .replace(/LoaderUrl = "[^"]*"/, () => `LoaderUrl = ${luaString(loaderUrl)}`);
+  if (token) script = script.replace(/Token = "[^"]*"/, () => `Token = ${luaString(token)}`);
+  return script;
 }
 
 const RECIPES_DIR = recipes.recipesDir(settings, ROOT);
-const CLIENT_URL = OPEN_MODE && findClientScript() ? `http://${HOST}:${PORT}/client.lua` : null;
+// What to run in the executor. In token mode the token goes after ?token= (the executor cannot send headers).
+const CLIENT_URL = OPEN_MODE && findClientScript() ? `http://${SHOWN_HOST}:${PORT}/client.lua` : null;
+const TOKEN_CLIENT_LINE = !OPEN_MODE && findClientScript() ? `loadstring(game:HttpGet("http://${SHOWN_HOST}:${PORT}/client.lua?token=YOUR_TOKEN"))()` : null;
 
 function pushBounded(list, entry) {
   list.push(entry);
@@ -176,6 +203,7 @@ function describeClients() {
     userName: ws.userName,
     executor: ws.executor,
     clientVersion: ws.clientVersion,
+    transport: ws.polling ? "polling" : "websocket",
     connectedForSec: Math.round((now - ws.connectedAt) / 1000),
     lastSeenMsAgo: now - ws.lastSeen,
     latencyMs: typeof ws.latencyMs === "number" ? ws.latencyMs : null,
@@ -456,6 +484,8 @@ function readJsonBody(req) {
 }
 
 function hostAllowed(hostHeader) {
+  // A bridge that other computers can reach is protected by its token, and clients use whatever address they have.
+  if (EXPOSED) return typeof hostHeader === "string" && hostHeader !== "";
   return hostHeader === `127.0.0.1:${PORT}` || hostHeader === `localhost:${PORT}`;
 }
 
@@ -468,6 +498,17 @@ const OWN_ORIGINS = new Set([
   `ws://localhost:${PORT}`,
 ]);
 
+function originAllowed(origin, hostHeader) {
+  if (OWN_ORIGINS.has(origin)) return true;
+  if (!EXPOSED || typeof hostHeader !== "string") return false;
+  // An executor that sends the bridge's own address as the Origin. A web page sends its own site instead.
+  try {
+    return new URL(origin).host === hostHeader;
+  } catch {
+    return false;
+  }
+}
+
 // Open mode needs a custom header that a web page cannot add without a CORS preflight.
 function authorized(req) {
   if (OPEN_MODE) {
@@ -475,6 +516,10 @@ function authorized(req) {
   }
   return tokenMatches(req.headers["x-bridge-token"]);
 }
+
+// Executors without a WebSocket talk to the bridge over HTTP instead (see poll-transport.js). Their sessions go
+// through the same connection handler as WebSocket clients.
+const polling = new PollHub({ attach: (session) => wss.emit("connection", session) });
 
 const server = http.createServer(async (req, res) => {
   try {
@@ -486,7 +531,7 @@ const server = http.createServer(async (req, res) => {
 
     // Blocks web pages. Browsers always attach their own origin to cross-origin requests.
     const origin = req.headers.origin;
-    if (origin && !OWN_ORIGINS.has(origin)) {
+    if (origin && !originAllowed(origin, req.headers.host)) {
       sendJson(res, 403, { error: "Forbidden origin" });
       return;
     }
@@ -497,7 +542,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    const url = new URL(req.url, `http://${HOST}:${PORT}`);
+    const url = new URL(req.url, "http://localhost");
     const route = `${req.method} ${url.pathname}`;
 
     // The dashboard page, its styles, script and fonts hold no data. The page loads everything through the API below.
@@ -529,12 +574,15 @@ const server = http.createServer(async (req, res) => {
 
     // The executor loads this with loadstring(game:HttpGet(...)), so it cannot send headers.
     if (route === "GET /client.lua") {
-      const script = OPEN_MODE ? readClientScript() : null;
+      // In token mode the executor passes the token in the address, because game:HttpGet cannot send headers.
+      const provided = url.searchParams.get("token");
+      const allowed = OPEN_MODE || tokenMatches(provided);
+      const script = allowed ? readClientScript(req.headers.host, OPEN_MODE ? "" : provided) : null;
       if (script === null) {
         sendJson(res, 404, {
-          error: OPEN_MODE
+          error: allowed
             ? "roblox/client.lua was not found next to the bridge"
-            : "client.lua is not served in token mode. Copy it into your executor and set CONFIG.Token.",
+            : "In token mode load the client with /client.lua?token=<your token>, or copy it into your executor and set CONFIG.Token.",
         });
         return;
       }
@@ -603,6 +651,26 @@ const server = http.createServer(async (req, res) => {
           { client: body.client, timeoutMs: clampTimeout(body.timeout_ms) },
         ),
       );
+    } else if (route === "POST /poll/hello") {
+      const body = await readJsonBody(req);
+      const result = polling.hello(body, OPEN_MODE ? undefined : req.headers["x-bridge-token"]);
+      if (result.error) sendJson(res, result.status, { error: result.error });
+      else sendJson(res, 200, { session: result.session });
+    } else if (route === "GET /poll/next") {
+      const result = await polling.next(url.searchParams.get("session"), url.searchParams.get("wait"));
+      if (result) sendJson(res, 200, result);
+      else sendJson(res, 404, { error: "Unknown session", closed: true });
+    } else if (route === "POST /poll/send") {
+      const body = await readJsonBody(req);
+      if (!Array.isArray(body.messages)) {
+        sendJson(res, 400, { error: "Field 'messages' must be an array" });
+      } else if (polling.push(url.searchParams.get("session"), body.messages)) {
+        sendJson(res, 200, { ok: true });
+      } else {
+        sendJson(res, 404, { error: "Unknown session", closed: true });
+      }
+    } else if (route === "POST /poll/close") {
+      sendJson(res, 200, { ok: polling.close(url.searchParams.get("session")) });
     } else if (route === "GET /recipes") {
       sendJson(res, 200, { dir: RECIPES_DIR, recipes: recipes.list(RECIPES_DIR) });
     } else if (req.method === "GET" && url.pathname.startsWith("/recipes/")) {
@@ -636,7 +704,7 @@ const wss = new WebSocketServer({
   // from reaching the bridge.
   verifyClient: ({ req }) => {
     const origin = req.headers.origin;
-    if (origin && !OWN_ORIGINS.has(origin)) {
+    if (origin && !originAllowed(origin, req.headers.host)) {
       note("warn", `rejected connection with Origin header: ${origin}`);
       return false;
     }
@@ -811,7 +879,8 @@ server.listen(PORT, HOST, () => {
 
   if (!FANCY) {
     console.log(`[superbase] bridge ${VERSION} listening on ws://${HOST}:${PORT} (HTTP API on the same port)`);
-    console.log(`[superbase] dashboard: http://${HOST}:${PORT}/`);
+    console.log(`[superbase] dashboard: http://${SHOWN_HOST}:${PORT}/`);
+    if (EXPOSED) console.log("[superbase] network mode: other computers can reach this bridge, the token is required for every request.");
     if (settings.file) console.log(`[superbase] settings from ${settings.file}`);
     for (const warning of settings.warnings) console.log(`[superbase] warning: ${warning}`);
     if (OPEN_MODE) {
@@ -824,12 +893,13 @@ server.listen(PORT, HOST, () => {
       }
     } else {
       console.log("[superbase] token mode: every request and the executor handshake must carry the token.");
+      if (TOKEN_CLIENT_LINE) console.log(`[superbase] load the client in your executor with: ${TOKEN_CLIENT_LINE} (put your token in place of YOUR_TOKEN)`);
     }
   } else {
     const row = (label, value) => console.log(`  ${ui.green(ui.sym.live)} ${ui.bold(label.padEnd(12))}${value}`);
     terminal.banner(ui, `Superbase Bridge ${VERSION}`, "Roblox executor and AI, connected", (line) => console.log(line));
     row("Running", `ws://${HOST}:${PORT}`);
-    row("Dashboard", ui.cyan(`http://${HOST}:${PORT}/`));
+    row("Dashboard", ui.cyan(`http://${SHOWN_HOST}:${PORT}/`));
     if (OPEN_MODE) {
       row("Mode", `open ${ui.dim("(no token, web pages are blocked)")}`);
     } else {
@@ -842,6 +912,10 @@ server.listen(PORT, HOST, () => {
     if (OPEN_MODE && CLIENT_URL) {
       console.log(`  ${ui.bold("Load this in your executor")}`);
       console.log(`    ${ui.cyan(`loadstring(game:HttpGet("${CLIENT_URL}"))()`)}`);
+      console.log("");
+    } else if (TOKEN_CLIENT_LINE) {
+      console.log(`  ${ui.bold("Load this in your executor")} ${ui.dim("(put your token in place of YOUR_TOKEN)")}`);
+      console.log(`    ${ui.cyan(TOKEN_CLIENT_LINE)}`);
       console.log("");
     } else if (OPEN_MODE) {
       console.log(`  ${ui.yellow(ui.sym.warn)} roblox/client.lua was not found, so /client.lua is not available.`);

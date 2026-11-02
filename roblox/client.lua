@@ -8,13 +8,15 @@
 local CONFIG = {
     Url = "ws://127.0.0.1:9731",
     Token = "", -- leave empty unless the bridge was started with BRIDGE_TOKEN
+    Transport = "auto", -- "auto" (WebSocket, then HTTP polling), "websocket" or "polling"
+    PollWait = 10, -- seconds one polling request may wait for news (the bridge allows up to 20)
     ReconnectDelay = 3,
     MaxMessageLength = 4000,
     MaxTableEntries = 200,
     MaxResultLength = 60000,
     MaxDepth = 6,
     HistoryLines = 100,
-    Version = "1.3.1",
+    Version = "1.3.2",
 
     -- Teleports: the executor forgets this script when the game moves you to another place. With
     -- AutoReconnectOnTeleport the script asks the executor to load it again in the new place (queue_on_teleport),
@@ -80,10 +82,247 @@ if resume and CONFIG.Token == "" and type(resume.token) == "string" then
     CONFIG.Token = resume.token
 end
 
+-- BEGIN POLLING TRANSPORT
+-- For executors without WebSocket. The bridge speaks the same messages over plain HTTP:
+--   POST /poll/hello, GET /poll/next (long poll), POST /poll/send, POST /poll/close.
+-- createPollingApi returns an object shaped like WebSocket.connect, so the rest of the script
+-- does not care which transport it uses. All outside access comes in through `deps`.
+local function createPollingApi(deps)
+    local api = {}
+
+    local function call(method, base, path, token, body)
+        local headers = { ["Content-Type"] = "application/json", ["x-superbase-client"] = "roblox" }
+        if token and token ~= "" then
+            headers["x-bridge-token"] = token
+        end
+        local ok, response = pcall(deps.request, { Url = base .. path, Method = method, Headers = headers, Body = body })
+        if not ok then
+            return nil, tostring(response)
+        end
+        if type(response) ~= "table" then
+            return nil, "the request function returned no response"
+        end
+        local text = response.Body or response.body or ""
+        local data = nil
+        if text ~= "" then
+            local decoded, value = pcall(deps.decode, text)
+            if decoded then
+                data = value
+            end
+        end
+        return { status = response.StatusCode or response.Status or 0, data = data }
+    end
+
+    local function signal()
+        local handlers = {}
+        return {
+            Connect = function(_, handler)
+                table.insert(handlers, handler)
+                return {
+                    Disconnect = function()
+                        for index, candidate in ipairs(handlers) do
+                            if candidate == handler then
+                                table.remove(handlers, index)
+                                break
+                            end
+                        end
+                    end,
+                }
+            end,
+            fire = function(_, ...)
+                for _, handler in ipairs({ table.unpack(handlers) }) do
+                    pcall(handler, ...)
+                end
+            end,
+        }
+    end
+
+    -- Like WebSocket.connect: errors when the bridge cannot be reached. Any HTTP answer counts as reachable.
+    function api.connect(url, token)
+        local base = tostring(url):gsub("^ws", "http"):gsub("/+$", "")
+        local probe, reason = call("GET", base, "/status", token)
+        if not probe then
+            error(reason, 0)
+        end
+
+        local socket = { OnMessage = signal(), OnClose = signal(), transport = "polling" }
+        local session = nil
+        local helloStarted = false
+        local open = true
+        local outbox = {}
+        local flushing = false
+
+        local function shutdown(notifyClose)
+            if not open then
+                return
+            end
+            open = false
+            if notifyClose then
+                socket.OnClose:fire()
+            end
+        end
+
+        local function flush()
+            if flushing then
+                return
+            end
+            flushing = true
+            while open and session and #outbox > 0 do
+                local batch = {}
+                while #outbox > 0 and #batch < 100 do
+                    table.insert(batch, table.remove(outbox, 1))
+                end
+                local reply = call("POST", base, "/poll/send?session=" .. session, token, deps.encode({ messages = batch }))
+                if not reply or reply.status == 404 then
+                    shutdown(true)
+                end
+            end
+            flushing = false
+        end
+
+        local function pollLoop()
+            local failures = 0
+            while open do
+                local reply = call("GET", base, "/poll/next?session=" .. session .. "&wait=" .. deps.waitMs, token)
+                if not open then
+                    break
+                end
+                if reply and reply.status == 200 and type(reply.data) == "table" then
+                    failures = 0
+                    for _, text in ipairs(reply.data.messages or {}) do
+                        socket.OnMessage:fire(text)
+                    end
+                    if reply.data.closed then
+                        shutdown(true)
+                    end
+                elseif reply and reply.status == 404 then
+                    shutdown(true)
+                else
+                    failures = failures + 1
+                    if failures >= 3 then
+                        shutdown(true)
+                    else
+                        deps.wait(1)
+                    end
+                end
+            end
+        end
+
+        -- The first message is the hello. It opens the session, everything after is queued for the sender.
+        function socket.Send(_, text)
+            if not open then
+                error("socket is closed", 0)
+            end
+            if session or helloStarted then
+                table.insert(outbox, text)
+                if session then
+                    deps.spawn(flush)
+                end
+                return
+            end
+
+            helloStarted = true
+            local decoded, hello = pcall(deps.decode, text)
+            if not decoded or type(hello) ~= "table" then
+                shutdown(true)
+                return
+            end
+            local helloToken = hello.token or token
+            hello.token = nil
+            local reply = call("POST", base, "/poll/hello", helloToken, deps.encode(hello))
+            if reply and reply.status == 200 and type(reply.data) == "table" and reply.data.session then
+                session = reply.data.session
+                deps.spawn(pollLoop)
+                deps.spawn(flush)
+            else
+                shutdown(true)
+            end
+        end
+
+        function socket.Close()
+            if not open then
+                return
+            end
+            local id = session
+            open = false
+            if id then
+                deps.spawn(function()
+                    call("POST", base, "/poll/close?session=" .. id, token, "{}")
+                end)
+            end
+        end
+
+        return socket
+    end
+
+    return api
+end
+-- END POLLING TRANSPORT
+
 local WebSocketApi = WebSocket or (syn and syn.websocket)
-if not WebSocketApi or not WebSocketApi.connect then
-    warn("[Superbase] This executor does not expose WebSocket.connect")
+if WebSocketApi and not WebSocketApi.connect then
+    WebSocketApi = nil
+end
+
+local function findRequestFunction()
+    local candidates = {
+        function() return request end,
+        function() return http_request end,
+        function() return syn and syn.request end,
+        function() return http and http.request end,
+        function() return fluxus and fluxus.request end,
+    }
+    for _, get in ipairs(candidates) do
+        local found, fn = pcall(get)
+        if found and type(fn) == "function" then
+            return fn
+        end
+    end
+    return nil
+end
+
+local requestFunction = findRequestFunction()
+local PollingApi = nil
+if requestFunction and CONFIG.Transport ~= "websocket" then
+    PollingApi = createPollingApi({
+        request = requestFunction,
+        encode = function(value) return HttpService:JSONEncode(value) end,
+        decode = function(text) return HttpService:JSONDecode(text) end,
+        spawn = task.spawn,
+        wait = task.wait,
+        waitMs = math.floor(CONFIG.PollWait * 1000),
+    })
+end
+if CONFIG.Transport == "polling" then
+    WebSocketApi = nil
+end
+
+if not WebSocketApi and not PollingApi then
+    warn("[Superbase] This executor exposes neither WebSocket.connect nor a request function, so it cannot reach the bridge")
     return
+end
+
+-- Opens a connection with the transport that works. WebSocket comes first. When it fails but the bridge answers
+-- over HTTP (an executor that blocks WebSocket, for example), polling takes over and stays the choice.
+local preferPolling = WebSocketApi == nil
+local function openSocket()
+    local websocketError = nil
+    if WebSocketApi and not preferPolling then
+        local ok, result = pcall(WebSocketApi.connect, CONFIG.Url)
+        if ok and result then
+            return result, "websocket"
+        end
+        websocketError = tostring(result)
+    end
+    if PollingApi then
+        local ok, result = pcall(PollingApi.connect, CONFIG.Url, CONFIG.Token)
+        if ok and result then
+            preferPolling = true
+            return result, "polling"
+        end
+        return nil, websocketError or tostring(result)
+    end
+    return nil, websocketError
 end
 
 local running = true
@@ -1110,12 +1349,17 @@ end
 
 local function connectLoop()
     local lastConnectError = nil
+    local announcedPolling = false
 
     while running do
-        local ok, result = pcall(WebSocketApi.connect, CONFIG.Url)
-        if ok and result then
+        local result, via = openSocket()
+        if result then
             lastConnectError = nil
             local current = result
+            if via == "polling" and not announcedPolling then
+                announcedPolling = true
+                print("[Superbase] Using HTTP polling (no usable WebSocket)")
+            end
             socket = current
             authenticated = false
             local closed = false
@@ -1165,7 +1409,7 @@ local function connectLoop()
             authenticated = false
         else
             -- Only warn when the reason changes, so a retry loop does not spam the console.
-            local reason = tostring(result)
+            local reason = tostring(via)
             if reason ~= lastConnectError then
                 lastConnectError = reason
                 warn("[Superbase] Cannot connect to " .. CONFIG.Url .. ": " .. reason)
@@ -1176,7 +1420,7 @@ local function connectLoop()
                 notify(
                     "warning",
                     "Bridge not found",
-                    "Start it with npm start. This script keeps retrying every " .. CONFIG.ReconnectDelay .. " seconds.",
+                    "Start the bridge (npm start) or let your AI start it. This script keeps retrying every " .. CONFIG.ReconnectDelay .. " seconds.",
                     "link",
                     "wifi-signal-poor"
                 )

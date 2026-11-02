@@ -106,6 +106,7 @@ function decodeSnippet(code) {
     "search inside the source code": "search_scripts",
     "record calls to RemoteEvent": "remote_spy",
     "look at and operate the game's GUI": "gui_interact",
+    "dump the source code of the game's scripts": "dump_scripts",
     "players and their characters": "player_info",
     "move the local character": "character_control",
     "performance numbers of the running game": "stats",
@@ -225,12 +226,13 @@ async function main() {
       "roblox_status",
       "screenshot",
       "search_scripts",
+      "semantic_search",
       "set_property",
       "snapshot",
       "stats",
       "wait_for_log",
     ]);
-    assert.strictEqual(res.result.tools.length, 23);
+    assert.strictEqual(res.result.tools.length, 24);
     for (const tool of res.result.tools) {
       assert.strictEqual(tool.inputSchema.type, "object");
       assert.strictEqual(tool.run, undefined, "implementation must not leak into tools/list");
@@ -240,10 +242,10 @@ async function main() {
       assert.ok(tool.description.length > 40, `${tool.name} needs a real description`);
     }
     const withClient = res.result.tools.filter((tool) => tool.inputSchema.properties.client).map((tool) => tool.name);
-    for (const name of ["execute_lua", "get_game_info", "inspect_instance", "get_hierarchy", "find_instances", "list_scripts", "get_script_source", "search_scripts", "remote_spy", "gui_interact", "set_property", "roblox_status", "get_logs", "get_errors", "wait_for_log", "clear_logs", "player_info", "character_control", "stats", "snapshot", "recipes"]) {
+    for (const name of ["execute_lua", "get_game_info", "inspect_instance", "get_hierarchy", "find_instances", "list_scripts", "get_script_source", "search_scripts", "remote_spy", "gui_interact", "set_property", "roblox_status", "get_logs", "get_errors", "wait_for_log", "clear_logs", "player_info", "character_control", "stats", "snapshot", "recipes", "semantic_search"]) {
       assert.ok(withClient.includes(name), `${name} must accept a client id`);
     }
-    assert.ok(instructions.includes("list_clients") && instructions.includes("remote_spy"), "instructions describe the new tools");
+    assert.ok(instructions.includes("list_clients") && instructions.includes("remote_spy") && instructions.includes("semantic_search"), "instructions describe the new tools");
 
     // State: bridge_offline (the bridge is not running yet).
     res = await mcp.call("roblox_status", {});
@@ -576,6 +578,14 @@ async function main() {
     assert.strictEqual(bodyOf(res).value.args.since_id, 12);
     res = await mcp.call("remote_spy", { action: "explode" });
     assert.strictEqual(res.result.isError, true);
+    res = await mcp.call("remote_spy", { action: "block", remotes: ["Buy", 5], include_own: true });
+    body = bodyOf(res).value;
+    assert.deepStrictEqual(body.args.remotes, ["Buy", "5"]);
+    assert.strictEqual(body.args.include_own, true);
+    res = await mcp.call("remote_spy", { action: "block" });
+    assert.strictEqual(res.result.isError, true, "block needs remotes");
+    res = await mcp.call("remote_spy", { action: "unblock" });
+    assert.ok(!res.result.isError, "unblock without names releases everything");
 
     res = await mcp.call("gui_interact", { action: "click", path: "Players.Me.PlayerGui.Main.Play", mode: "mouse" });
     body = bodyOf(res).value;
@@ -779,6 +789,29 @@ async function main() {
     res = await broken.call("roblox_status", {});
     assert.ok(textOf(res).includes("bridge_offline") && textOf(res).includes("could not be started automatically"), textOf(res));
     fs.rmSync(autoHome, { recursive: true, force: true });
+
+    // A bridge on another computer: never started from here, and the hint says so.
+    const away = startMcp(19738, { SUPERBASE_HOST: "superbase-bridge.invalid", SUPERBASE_AUTOSTART: "1", SUPERBASE_HOME: fs.mkdtempSync(path.join(os.tmpdir(), "superbase-remote-")) });
+    children.push(away.child);
+    res = await away.call("roblox_status", {});
+    assert.ok(textOf(res).includes("bridge_offline") && textOf(res).includes("another computer"), textOf(res));
+    assert.ok(!textOf(res).includes("started in the background"), "a remote bridge is never started from here");
+
+    // The same through a real network address of this machine, when it has one.
+    const lan = Object.values(os.networkInterfaces()).flat().find((nic) => nic && nic.family === "IPv4" && !nic.internal);
+    if (lan) {
+      const netBridge = spawn("node", [BRIDGE], { env: { ...process.env, ...CLEAN_ENV, SUPERBASE_PORT: "19739", SUPERBASE_HOST: "0.0.0.0", SUPERBASE_TOKEN: TOKEN } });
+      children.push(netBridge);
+      await new Promise((resolve, reject) => {
+        netBridge.stdout.on("data", (data) => data.toString().includes("listening") && resolve());
+        netBridge.stderr.on("data", (data) => reject(new Error(data.toString())));
+      });
+      const viaLan = startMcp(19739, { SUPERBASE_HOST: lan.address, SUPERBASE_TOKEN: TOKEN });
+      children.push(viaLan.child);
+      res = await viaLan.call("roblox_status", {});
+      assert.ok(textOf(res).includes("waiting_for_roblox"), textOf(res));
+      assert.strictEqual(bodyOf(res).mode, "token");
+    }
 
     console.log("ALL SUPERBASE CHECKS PASSED");
   } finally {

@@ -81,7 +81,7 @@ set -e
 
 echo ""
 say "Superbase is in $DIR"
-say "Start the bridge with:  cd \"$DIR\" && npm start"
+say "The bridge starts by itself when your AI needs it. To watch it in a terminal: npm start (in that folder)."
 if [ "${SUPERBASE_START:-}" = "1" ]; then
   say "Starting the bridge..."
   npm start

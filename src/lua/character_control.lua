@@ -103,8 +103,22 @@ end
 
 local from = { x = round(root.Position.X), y = round(root.Position.Y), z = round(root.Position.Z) }
 
+-- The pivot of a character is not always its root part (an R6 rig pivots about 1.5 studs higher), so the move is
+-- worked out for the root part, and the rotation of the character is kept. If that cannot be done, the plain
+-- move is used.
+local function moveRootTo(x, y, z)
+    local moved = pcall(function()
+        local pivot = character:GetPivot()
+        local offset = pivot.Position - root.Position
+        character:PivotTo((pivot - pivot.Position) + Vector3.new(x + offset.X, y + offset.Y, z + offset.Z))
+    end)
+    if not moved then
+        character:PivotTo(CFrame.new(x, y, z))
+    end
+end
+
 if action == "teleport" then
-    character:PivotTo(CFrame.new(goal.x, goal.y, goal.z))
+    moveRootTo(goal.x, goal.y, goal.z)
     return {
         action = "teleport",
         target = what,

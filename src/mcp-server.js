@@ -10,15 +10,18 @@ const fs = require("fs");
 const path = require("path");
 const readline = require("readline");
 const { parseSelector, SelectorError } = require("./selector");
-const { loadSettings } = require("./config");
+const { loadSettings, isLocalHost, connectHost } = require("./config");
 const background = require("./background");
 const recipeStore = require("./recipes");
+const semantic = require("./semantic");
 
-const VERSION = "1.3.1";
+const VERSION = "1.3.2";
 const SETTINGS = loadSettings(process.env);
 const PORT = SETTINGS.port;
 const TOKEN = SETTINGS.token;
-const BASE_URL = `http://127.0.0.1:${PORT}`;
+// A bridge on another computer (the "host" setting) is reached over the network and is never started from here.
+const REMOTE_BRIDGE = !isLocalHost(SETTINGS.host);
+const BASE_URL = `http://${connectHost(SETTINGS.host)}:${PORT}`;
 // Set this to a public raw URL of roblox/client.lua if you host it somewhere (for example GitHub).
 const CLIENT_URL_OVERRIDE = SETTINGS.clientUrl || "";
 const RECIPES_DIR = recipeStore.recipesDir(SETTINGS);
@@ -51,10 +54,11 @@ const INSTRUCTIONS = [
   "Working with the game:",
   "- get_game_info gives an overview. get_hierarchy prints the tree, find_instances searches it (by name, class or a CSS-like selector), inspect_instance reads one instance.",
   "- Scripts: list_scripts lists them, get_script_source reads one, search_scripts greps through all sources (text, Lua pattern or words mode).",
-  "- remote_spy records RemoteEvent and RemoteFunction calls: start it, let the user (or gui_interact) trigger the action, read the calls with get, then stop it.",
+  "- remote_spy records RemoteEvent and RemoteFunction calls: start it, let the user (or gui_interact) trigger the action, read the calls with get, then stop it. With block it can also stop calls to chosen remotes from reaching the server (unblock undoes it).",
   "- gui_interact lists buttons and text boxes, clicks buttons, types into text boxes and triggers click detectors and proximity prompts. screenshot shows what the Roblox window looks like (Windows only).",
   "- player_info lists the players with position, distance, health and items. character_control teleports the local character or walks it to a position, a player or an instance.",
   "- stats measures FPS (average, minimum, 1% low), stutters, memory, ping and world size, with short notes on what looks wrong. snapshot saves the state of part of the tree and later reports what was added, removed or changed, which is the way to see the effect of an action.",
+  "- semantic_search finds code by meaning with a local Ollama: index the game once (repeat with offset until done is true), then search with a plain description. It needs Ollama running with the embedding model pulled, and says what is missing. Use search_scripts for exact text.",
   "- recipes lists, runs and saves reusable Lua scripts (a folder of .lua files with a header). Check the list before you write a script for a common task, and save a script as a recipe when the user will want it again.",
   "- To check the effect of an action, use execute_lua with capture_logs, or wait_for_log to wait for a specific console line.",
   "- Logs and errors are stored by the bridge, so get_logs and get_errors still work while waiting_for_roblox.",
@@ -63,6 +67,7 @@ const INSTRUCTIONS = [
   "",
   "Safety:",
   "- execute_lua, set_property, gui_interact (click, set_text, trigger) and remote_spy change or observe the running game with the executor's full permissions. Only do what the user asked for, and explain anything that changes the game or the user's files before you do it. character_control moves the player and recipes (save) writes a file in the recipes folder, so treat them the same way.",
+  "- If the bridge runs on another computer (the host setting), it is never started automatically: tell the user to start it there.",
   "- Instance paths are dotted and start at game. Instance names that contain a dot cannot be addressed.",
 ].join("\n");
 
@@ -89,6 +94,9 @@ function describeClientList(status) {
 function hintFor(state, status, autostartError) {
   switch (state) {
     case "bridge_offline":
+      if (REMOTE_BRIDGE) {
+        return `The Superbase bridge at ${BASE_URL} is not reachable. It runs on another computer, so it is not started automatically. Ask the user to start it there (host 0.0.0.0 or its network address, plus a token) and to check the firewall for port ${PORT}.`;
+      }
       if (autostartError) {
         return `The Superbase bridge is not running on ${BASE_URL} and could not be started automatically: ${autostartError} Ask the user to run npm start in the Superbase folder and tell you what it prints.`;
       }
@@ -158,7 +166,7 @@ async function bridgeRequest(method, urlPath, body, timeoutMs = REQUEST_TIMEOUT_
 const autostart = { promise: null, at: 0, result: null, notice: null };
 
 async function autostartBridge() {
-  if (!SETTINGS.autostart) return null;
+  if (!SETTINGS.autostart || REMOTE_BRIDGE) return null;
   if (autostart.promise) return autostart.promise;
   const age = Date.now() - autostart.at;
   if (autostart.result && !autostart.result.ok && age < 30000) return autostart.result;
@@ -229,9 +237,9 @@ function statusLine(connection) {
     if (connection.executor) parts.push(connection.executor);
     if (typeof connection.latencyMs === "number") parts.push(`${connection.latencyMs} ms`);
     if (connection.clientCount > 1) parts.push(`${connection.clientCount} clients connected`);
-    return `[Superbase] ● connected${parts.length > 0 ? ` — ${parts.join(", ")}` : ""}`;
+    return `[Superbase] ● connected${parts.length > 0 ? `: ${parts.join(", ")}` : ""}`;
   }
-  return `[Superbase] ○ ${connection.state} — ${connection.hint}`;
+  return `[Superbase] ○ ${connection.state}: ${connection.hint}`;
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -295,6 +303,157 @@ function execOnClient(code, { client, timeoutMs } = {}) {
   // The bridge waits for the executor, so this request must outlast the command timeout.
   const requestTimeout = timeoutMs ? timeoutMs + 5000 : REQUEST_TIMEOUT_MS;
   return bridgeRequest("POST", "/exec", body, requestTimeout);
+}
+
+// --- semantic_search ---------------------------------------------------------------------------------------------
+
+const semanticStore = new semantic.IndexStore(path.join(background.locations(process.env).dir, "semantic"));
+const embedOptions = () => ({ url: SETTINGS.ollamaUrl, model: SETTINGS.embedModel });
+
+function describeIndex(placeId, meta) {
+  return {
+    placeId,
+    model: meta.model,
+    scripts: meta.scripts,
+    chunks: meta.count,
+    indexedAt: meta.indexedAt,
+    complete: meta.nextOffset === null || meta.nextOffset === undefined,
+    nextOffset: meta.nextOffset ?? null,
+  };
+}
+
+async function semanticAction(args, ctx) {
+  const wanted = args.place_id === undefined ? null : String(args.place_id);
+
+  if (args.action === "status") {
+    const ids = wanted ? [wanted] : semanticStore.list();
+    const indexes = [];
+    for (const id of ids) {
+      const found = semanticStore.load(id);
+      if (found) indexes.push(describeIndex(id, found.meta));
+    }
+    return { model: SETTINGS.embedModel, ollama: SETTINGS.ollamaUrl, indexes };
+  }
+
+  if (args.action === "clear") {
+    const ids = wanted ? [wanted] : semanticStore.list();
+    const removed = ids.filter((id) => semanticStore.remove(id));
+    return { removed };
+  }
+
+  if (args.action === "search") {
+    if (typeof args.query !== "string" || args.query.trim() === "") throw new Error("'query' must be a non-empty string.");
+    const placeId = wanted || semanticStore.list()[0];
+    const found = placeId ? semanticStore.load(placeId) : null;
+    if (!found) {
+      return { ok: false, value: null, error: wanted ? `There is no index for place ${wanted}. Run semantic_search with action index first.` : "Nothing is indexed yet. Run semantic_search with action index in the game first." };
+    }
+    if (found.meta.model !== SETTINGS.embedModel) {
+      return { ok: false, value: null, error: `The index was built with ${found.meta.model} but the model is now ${SETTINGS.embedModel}. Run action index again (offset 0) or set embedModel back.` };
+    }
+    const [query] = await semantic.embed([semantic.formatInput(SETTINGS.embedModel, "query", args.query)], embedOptions());
+    const contains = typeof args.path_contains === "string" ? args.path_contains.toLowerCase() : "";
+    const hits = semantic.topMatches(found.vectors, query, clampInt(args.k, 1, 30, 8), (index) => !contains || found.meta.chunks[index].path.toLowerCase().includes(contains));
+    return {
+      placeId,
+      model: found.meta.model,
+      indexedAt: found.meta.indexedAt,
+      complete: found.meta.nextOffset === null || found.meta.nextOffset === undefined,
+      searched: found.vectors.length,
+      results: hits.map(({ index, score }) => {
+        const chunk = found.meta.chunks[index];
+        return { score: Math.round(score * 1000) / 1000, path: chunk.path, className: chunk.className, lines: `${chunk.start}-${chunk.end}`, text: chunk.text };
+      }),
+    };
+  }
+
+  // index
+  const budgetMs = clampInt(args.budget_seconds, 10, 300, 100) * 1000;
+  const maxScripts = clampInt(args.max_scripts, 1, 3000, 400);
+  const startedAt = Date.now();
+  let offset = clampInt(args.offset, 0, Number.MAX_SAFE_INTEGER, 0);
+  await semantic.embed(["ping"], embedOptions()); // fails early and clearly when Ollama or the model is missing
+
+  let chunks = [];
+  let vectors = [];
+  let scriptCount = 0;
+  let placeId = null;
+  let existing = null;
+  let processed = 0;
+  let unreadable = 0;
+  let total = 0;
+  let nextOffset = offset;
+
+  while (true) {
+    const page = await runSnippet(
+      "dump_scripts",
+      { offset, root: args.root, class_name: args.class_name, include_hidden: args.include_hidden === true },
+      { ...ctx, timeoutMs: 60000 },
+    );
+    if (!page.ok) return page;
+    const data = page.value;
+    placeId = String(data.placeId);
+    total = data.total;
+    unreadable += data.unreadable || 0;
+
+    if (existing === null) {
+      if (offset === 0) {
+        existing = { fresh: true };
+      } else {
+        const found = semanticStore.load(placeId);
+        if (!found) return { ok: false, value: null, error: `There is no index for place ${placeId} to continue. Start again with offset 0.` };
+        if (found.meta.model !== SETTINGS.embedModel) return { ok: false, value: null, error: `The index was built with ${found.meta.model}, not ${SETTINGS.embedModel}. Start again with offset 0.` };
+        chunks = found.meta.chunks;
+        vectors = found.vectors;
+        scriptCount = found.meta.scripts || 0;
+        existing = found;
+      }
+    }
+
+    const pageChunks = [];
+    for (const script of data.scripts) {
+      for (const piece of semantic.chunkSource(script.source)) {
+        pageChunks.push({ path: script.path, className: script.className, start: piece.start, end: piece.end, text: piece.text });
+      }
+    }
+    const inputs = pageChunks.map((chunk) => semantic.formatInput(SETTINGS.embedModel, "document", chunk.text, chunk.path));
+    const embedded = await semantic.embed(inputs, embedOptions());
+    chunks = chunks.concat(pageChunks);
+    vectors = vectors.concat(embedded);
+    scriptCount += data.scripts.length;
+    processed += data.scripts.length;
+    nextOffset = data.nextOffset === undefined || data.nextOffset === null ? null : data.nextOffset;
+
+    // Save after every page, so a long run keeps its progress.
+    semanticStore.save(placeId, {
+      model: SETTINGS.embedModel,
+      placeId,
+      indexedAt: new Date().toISOString(),
+      scripts: scriptCount,
+      nextOffset,
+      chunks,
+    }, vectors);
+
+    if (nextOffset === null || processed >= maxScripts || Date.now() - startedAt > budgetMs) break;
+    offset = nextOffset;
+  }
+
+  return {
+    ok: true,
+    value: {
+      placeId,
+      model: SETTINGS.embedModel,
+      scriptsThisCall: processed,
+      scriptsIndexed: scriptCount,
+      chunks: chunks.length,
+      unreadable,
+      totalScripts: total,
+      done: nextOffset === null,
+      nextOffset,
+      note: nextOffset === null ? "The index is complete. Use action search." : `More scripts are left. Call index again with offset ${nextOffset}.`,
+    },
+    error: null,
+  };
 }
 
 function requirePath(args) {
@@ -725,18 +884,58 @@ const tools = [
     },
   },
   {
-    name: "remote_spy",
-    title: "Spy on remote calls",
+    name: "semantic_search",
+    title: "Search scripts by meaning",
     description:
-      "Record the RemoteEvent:FireServer and RemoteFunction:InvokeServer calls the game's own scripts make, with their arguments and the calling script. Actions: start (begin recording, optional only, ignore, max_calls, include_own), get (read recorded calls, optional since_id, contains, remote, limit), stop, clear and status. Typical use: start, make the action happen (ask the user or use gui_interact), then get. Recording needs hookmetamethod in the executor and stays installed until the game is left. Requires the connected state.",
+      "Find code by what it does, not by exact words, with embeddings from a local Ollama (model embeddinggemma by default; nothing leaves the computer). Actions: index (read the scripts of the connected game and build the index; big games take several calls, repeat with offset set to the returned nextOffset until done is true), search (query, optional k, path_contains, place_id: returns the closest code chunks with their path and lines), status (what is indexed) and clear (delete the index of place_id, or all). Search and status do not need the game. Needs Ollama running with the model pulled (ollama pull embeddinggemma). For exact text use search_scripts instead.",
     inputSchema: {
       type: "object",
       properties: {
-        action: { type: "string", enum: ["start", "stop", "get", "clear", "status"], description: "What to do." },
+        action: { type: "string", enum: ["index", "search", "status", "clear"], description: "What to do." },
+        query: { type: "string", description: "search: what the code should do, in plain words." },
+        k: { type: "integer", minimum: 1, maximum: 30, description: "search: how many chunks to return (default 8)." },
+        path_contains: { type: "string", description: "search: only chunks whose script path contains this." },
+        place_id: { type: "string", description: "search, status, clear: the place to use (default: the most recently indexed one; clear without it deletes every index)." },
+        offset: { type: "integer", minimum: 0, description: "index: script to continue from (default 0, which starts a new index)." },
+        max_scripts: { type: "integer", minimum: 1, maximum: 3000, description: "index: scripts to process in this call (default 400)." },
+        budget_seconds: { type: "integer", minimum: 10, maximum: 300, description: "index: stop after this many seconds (default 100)." },
+        root: { type: "string", description: "index: dotted path to index under (default game)." },
+        class_name: { type: "string", enum: ["Script", "LocalScript", "ModuleScript"], description: "index: only this kind of script." },
+        include_hidden: { type: "boolean", description: "index: also scripts outside the tree (default false)." },
+        client: CLIENT_PROPERTY,
+      },
+      required: ["action"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    needsRoblox: (args) => args.action === "index",
+    local: (args) => args.action !== "index",
+    run: async (args, ctx) => {
+      if (!["index", "search", "status", "clear"].includes(args.action)) {
+        throw new Error("'action' must be index, search, status or clear.");
+      }
+      try {
+        return await semanticAction(args, ctx);
+      } catch (error) {
+        if (error instanceof semantic.SemanticError) return { ok: false, value: null, error: error.message };
+        throw error;
+      }
+    },
+  },
+  {
+    name: "remote_spy",
+    title: "Spy on remote calls",
+    description:
+      "Record the RemoteEvent:FireServer and RemoteFunction:InvokeServer calls the game's own scripts make, with their arguments and the calling script. Actions: start (begin recording, optional only, ignore, max_calls, include_own), get (read recorded calls, optional since_id, contains, remote, limit), stop, clear and status. Typical use: start, make the action happen (ask the user or use gui_interact), then get. block (remotes: names or full paths) drops the game's calls to those remotes before they reach the server, even without recording, and unblock releases them (all when remotes is empty). Blocking changes how the game behaves, so only do it when the user asked for it and tell them which remotes are blocked. Recording and blocking need hookmetamethod in the executor and stay installed until the game is left. Requires the connected state.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["start", "stop", "get", "clear", "status", "block", "unblock"], description: "What to do." },
+        remotes: { type: "array", items: { type: "string" }, description: "block or unblock: remote names or full paths (for example ReplicatedStorage.Events.Buy)." },
         only: { type: "string", description: "start: only record remotes whose name contains this." },
         ignore: { type: "array", items: { type: "string" }, description: "start: remote names to skip, for example noisy ones." },
         max_calls: { type: "integer", minimum: 50, maximum: 2000, description: "start: how many calls to keep (default 500)." },
-        include_own: { type: "boolean", description: "start: also record calls made by code run through Superbase (default false)." },
+        include_own: { type: "boolean", description: "start: also record calls made by code run through Superbase. block: also block those calls (default false)." },
         since_id: { type: "integer", description: "get: only calls after this id (use the lastId of the previous result)." },
         contains: { type: "string", description: "get: only calls whose remote name or arguments contain this." },
         remote: { type: "string", description: "get: only calls to the remote with exactly this name." },
@@ -749,8 +948,11 @@ const tools = [
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     needsRoblox: true,
     run: (args, ctx) => {
-      if (!["start", "stop", "get", "clear", "status"].includes(args.action)) {
-        throw new Error("'action' must be start, stop, get, clear or status.");
+      if (!["start", "stop", "get", "clear", "status", "block", "unblock"].includes(args.action)) {
+        throw new Error("'action' must be start, stop, get, clear, status, block or unblock.");
+      }
+      if (args.action === "block" && !(Array.isArray(args.remotes) && args.remotes.length > 0)) {
+        throw new Error("'remotes' is required for block: the names or full paths of the remotes to block.");
       }
       return runSnippet(
         "remote_spy",
@@ -758,6 +960,7 @@ const tools = [
           action: args.action,
           only: args.only,
           ignore: Array.isArray(args.ignore) ? args.ignore.map(String) : undefined,
+          remotes: Array.isArray(args.remotes) ? args.remotes.map(String) : undefined,
           max_calls: args.max_calls === undefined ? undefined : clampInt(args.max_calls, 50, 2000, 500),
           include_own: args.include_own === true,
           since_id: args.since_id,

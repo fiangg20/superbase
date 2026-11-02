@@ -1,12 +1,17 @@
 -- Superbase snippet: record calls to RemoteEvent:FireServer and RemoteFunction:InvokeServer.
 -- The MCP server puts "local args = ..." in front of this file.
 -- Arguments:
---   args.action        "start", "stop", "get", "clear" or "status"
+--   args.action        "start", "stop", "get", "clear", "status", "block" or "unblock"
 --   start:  args.ignore (remote names to skip), args.only (remote name substring to keep),
 --           args.max_calls (buffer size, default 500), args.include_own (also record calls made by
 --           code run through Superbase, default false)
 --   get:    args.since_id (only calls after this id), args.contains (text in the remote name or the
 --           arguments), args.remote (exact remote name), args.limit (default 50)
+--   block:  args.remotes (remote names or full paths such as "ReplicatedStorage.Events.Buy"): calls the game
+--           makes to these remotes are dropped before they reach the server. Blocking works without
+--           recording and stays until unblock (or until the game is left). Calls made by code run through
+--           Superbase are never blocked unless args.include_own is true.
+--   unblock: args.remotes (what to release, everything when empty)
 -- The recorder lives in the executor's global table, so it survives running this snippet again.
 
 local action = tostring(args.action or "status")
@@ -24,8 +29,25 @@ if type(state) ~= "table" then
         ignore = {},
         only = nil,
         includeOwn = false,
+        blocked = {},
+        blockedCalls = 0,
+        blockOwn = false,
     }
     genv.__SuperbaseSpy = state
+end
+if type(state.blocked) ~= "table" then
+    state.blocked = {}
+    state.blockedCalls = 0
+    state.blockOwn = false
+end
+
+local function blockedList()
+    local list = {}
+    for name in pairs(state.blocked) do
+        list[#list + 1] = name
+    end
+    table.sort(list)
+    return list
 end
 
 local function statusInfo()
@@ -38,6 +60,8 @@ local function statusInfo()
         maxCalls = state.maxCalls,
         only = state.only,
         includeOwn = state.includeOwn,
+        blocked = blockedList(),
+        blockedCalls = state.blockedCalls,
     }
 end
 
@@ -96,7 +120,24 @@ local function isRemote(instance)
     return ok and result
 end
 
-local function record(remote, method, packed)
+-- A remote is blocked by its name or by its full path.
+local function isBlocked(remote)
+    if next(state.blocked) == nil then
+        return false
+    end
+    if not state.blockOwn and type(checkcaller) == "function" and checkcaller() then
+        return false
+    end
+    if state.blocked[remote.Name] then
+        return true
+    end
+    local ok, fullName = pcall(function()
+        return remote:GetFullName()
+    end)
+    return ok and state.blocked[fullName] == true
+end
+
+local function record(remote, method, packed, wasBlocked)
     local name = remote.Name
     if state.ignore[name] then
         return
@@ -136,6 +177,7 @@ local function record(remote, method, packed)
         argCount = packed.n,
         args = rendered,
         caller = caller,
+        blocked = wasBlocked or nil,
     }
 
     while #state.calls > state.maxCalls do
@@ -156,8 +198,16 @@ local function install()
     local handler = function(self, ...)
         local method = getnamecallmethod()
         if method == "FireServer" or method == "InvokeServer" then
-            if state.active and isRemote(self) then
-                pcall(record, self, method, table.pack(...))
+            if isRemote(self) then
+                local blocked = isBlocked(self)
+                if state.active then
+                    pcall(record, self, method, table.pack(...), blocked)
+                end
+                if blocked then
+                    state.blockedCalls = state.blockedCalls + 1
+                    -- The call never reaches the server. A blocked InvokeServer returns nil.
+                    return nil
+                end
             end
             -- Calling other functions can reset the namecall method on some executors.
             if type(setnamecallmethod) == "function" then
@@ -197,6 +247,42 @@ if action == "start" then
     state.maxCalls = math.max(50, math.min(2000, math.floor(tonumber(args.max_calls) or 500)))
     state.active = true
     return statusInfo()
+elseif action == "block" or action == "unblock" then
+    local names = {}
+    if type(args.remotes) == "table" then
+        for _, name in ipairs(args.remotes) do
+            names[#names + 1] = tostring(name)
+        end
+    end
+
+    if action == "block" then
+        if #names == 0 then
+            return { error = "block needs 'remotes': the names or full paths of the remotes to block." }
+        end
+        local installed, reason = install()
+        if not installed then
+            return { error = reason }
+        end
+        for _, name in ipairs(names) do
+            state.blocked[name] = true
+        end
+        if args.include_own == true then
+            state.blockOwn = true
+        end
+    elseif #names == 0 then
+        state.blocked = {}
+        state.blockOwn = false
+    else
+        for _, name in ipairs(names) do
+            state.blocked[name] = nil
+        end
+        if next(state.blocked) == nil then
+            state.blockOwn = false
+        end
+    end
+    local info = statusInfo()
+    info.blockOwn = state.blockOwn
+    return info
 elseif action == "stop" then
     state.active = false
     return statusInfo()
@@ -239,4 +325,4 @@ elseif action == "get" then
     return info
 end
 
-return { error = "Unknown action '" .. action .. "'. Use start, stop, get, clear or status." }
+return { error = "Unknown action '" .. action .. "'. Use start, stop, get, clear, status, block or unblock." }
