@@ -783,7 +783,7 @@ async function run(argv, ctx = {}) {
       out(`         ${ui.cyan(oneLiner(settings.port, connectHost(settings.host), settings.token))}`);
     }
     out(`    ${ui.cyan("3")}  Ask the AI: ${ui.dim('"Check the Roblox connection."')}`);
-    out(`       ${ui.dim("The bridge starts by itself when the AI needs it. No npm start.")}`);
+    out(`       ${ui.dim("The bridge starts by itself when the AI needs it. npm start is optional, for running it by hand.")}`);
     if (!autoexecDone) out(`       ${ui.dim("Run it automatically in every game: npm run autoexec")}`);
     out("");
   } else if (!fancy) {

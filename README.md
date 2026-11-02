@@ -16,7 +16,7 @@
 
 Superbase is a local [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that connects AI assistants to running Roblox sessions through your executor. The AI can read the console and script errors, explore the instance tree with CSS-like selectors, read and search script sources, spy on remote calls, operate the GUI, take screenshots, see the players, move the character, measure performance, compare snapshots of the game, change properties and run Lua. It always knows whether Roblox is actually connected, and you can watch everything in a local web dashboard.
 
-- **One command to set up.** `npm run setup` installs the one dependency and registers the MCP server in your AI clients. There is no separate `npm install`: the bridge starts by itself when the AI needs it.
+- **One command to set up.** `npm run setup` installs the one dependency and registers the MCP server in your AI clients. There is no separate `npm install` step, and you do not have to run `npm start`: the bridge starts by itself when the AI needs it. `npm start` is still there when you want to run the bridge yourself.
 - **Connection aware.** Every tool result starts with a status line. When the game is not connected, the AI gets the exact script you need to run and tells you.
 - **24 tools** for logs, errors, inspection, selectors, hierarchy trees, script listing, text search and search by meaning, remote spying and blocking, GUI interaction, screenshots, players and characters, performance stats, snapshots and diffs, saved Lua recipes, properties and code execution.
 - **Stays connected through teleports.** The client loads itself again in the new place, so the AI does not lose the game when you change servers.
@@ -106,12 +106,13 @@ Because the bridge stores logs, the AI can still read what happened after you le
 git clone https://github.com/fiangg20/superbase.git
 cd superbase
 npm run setup
-npm start
 ```
 
-That is all. `npm run setup` installs the dependency, finds your AI clients and registers the MCP server in them. You do not need `npm install`: when the AI calls a tool and no bridge is running, the MCP server starts one in the background and tells the AI (and so you) that it did. At the end the setup prints the line to run in your executor, and offers to put the loader in your executor's autoexec folder, so the executor loads Superbase by itself in every game (see [Loader and autoexec](#loader-and-autoexec)).
+That is all. `npm run setup` installs the dependency, finds your AI clients and registers the MCP server in them. You do not need `npm install`, and `npm start` is optional: when the AI calls a tool and no bridge is running, the MCP server starts one in the background and tells the AI (and so you) that it did. At the end the setup prints the line to run in your executor, and offers to put the loader in your executor's autoexec folder, so the executor loads Superbase by itself in every game (see [Loader and autoexec](#loader-and-autoexec)).
 
-Restart your AI client once so it loads the change. If you want to watch the bridge in a terminal, `npm start` still works and prints this:
+Restart your AI client once so it loads the change.
+
+**Running the bridge yourself (optional).** `npm start` runs the bridge in your terminal. It is the way to go when you want to watch every event live, see the styled screen, start it before the AI does, use a [token](#token-mode), another port or a [network address](#several-computers), or when you simply prefer to control it by hand. It prints this:
 
 ```
   ╭────────────────────────────────────────────╮
@@ -143,7 +144,7 @@ Join a game and run this in your executor:
 loadstring(game:HttpGet("http://127.0.0.1:9731/client.lua"))()
 ```
 
-The intro plays, the console prints `[Superbase] Connected and authenticated` and a **Connected** notification appears in the top right corner.
+The intro plays (the first time only), the console prints `[Superbase] Connected and authenticated` and a **Connected** notification appears in the top right corner.
 
 If your executor blocks `HttpGet` to `localhost`, use the [loader](#loader-and-autoexec) instead (`npm run loader`), or paste the contents of [`roblox/client.lua`](roblox/client.lua) into the executor.
 
@@ -955,7 +956,7 @@ The bridge pings every client every 10 seconds and drops one after 30 seconds of
 
 `roblox/client.lua` does more than relay messages.
 
-**Intro.** A short animated intro plays when the client starts. It does not delay the connection.
+**Intro.** A short animated intro plays the first time the client starts, and not again after that, so an [autoexec loader](#loader-and-autoexec) does not replay it in every game. Superbase remembers it with a small file in the executor's workspace (`superbase-intro-seen.txt`). Delete that file to see the intro again, or set `Intro.Once` to `false` to play it every time. It does not delay the connection.
 
 **Notifications.** Small toasts appear in the top right corner, with an icon, a title and a line of text in Builder Sans. The icons come from the Builder Icons font that ships with Roblox (`rbxasset://LuaPackages/Packages/_Index/BuilderIcons/BuilderIcons/BuilderIcons.json`). The icon name is the text of the label, the Bold weight draws the filled icon and the Regular weight the outlined one. If Roblox does not have the font, the toast shows a dot instead, and if it does not have Builder Sans it uses Gotham.
 
@@ -995,6 +996,7 @@ Edit the `CONFIG` table at the top of `roblox/client.lua`.
 | `ToastTime` | `4` | Seconds a notification stays on screen. |
 | `MaxToasts` | `4` | Notifications visible at once. |
 | `Intro.Enabled` | `true` | Play the intro. |
+| `Intro.Once` | `true` | Play it only the first time (remembered in `superbase-intro-seen.txt`; without file functions, once per executor session). |
 | `Intro.*` | | Icon, color, timing, blur and swipe settings of the intro. |
 | `HistoryLines` | `100` | Console history sent when connecting. |
 | `MaxMessageLength` | `4000` | Longest console message sent. |

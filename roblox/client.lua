@@ -32,9 +32,13 @@ local CONFIG = {
     ToastTime = 4, -- seconds a toast stays on screen
     MaxToasts = 4, -- toasts visible at the same time
 
-    -- Intro animation. Set Enabled to false to skip it.
+    -- Intro animation. Set Enabled to false to skip it. With Once it plays only the first time, so an autoexec
+    -- loader does not replay it in every game. It is remembered in a small file in the executor's workspace
+    -- (superbase-intro-seen.txt, delete it to see the intro again). Without file functions it plays once per
+    -- executor session.
     Intro = {
         Enabled = true,
+        Once = true,
         Icon = "rbxassetid://132430598780696",
         Color = Color3.fromRGB(51, 95, 255),
         IconSize = 128,
@@ -1504,8 +1508,48 @@ pcall(setUpTeleportResume)
 genv.__Superbase = { Stop = stop }
 print("[Superbase] Started, connecting to " .. CONFIG.Url)
 
--- After a teleport the intro is skipped, the connection toast is enough.
-if CONFIG.Intro and CONFIG.Intro.Enabled and not resume then
+-- BEGIN INTRO GATE
+-- Decides whether the intro plays. All outside access comes in through `deps`, so it can be tested.
+local function createIntroGate(deps)
+    local MARKER = "superbase-intro-seen.txt"
+    local gate = {}
+
+    function gate.alreadySeen()
+        if deps.memory.__SuperbaseIntroSeen then
+            return true
+        end
+        if type(deps.isfile) == "function" then
+            local ok, exists = pcall(deps.isfile, MARKER)
+            if ok and exists then
+                return true
+            end
+        end
+        return false
+    end
+
+    function gate.markPlayed()
+        deps.memory.__SuperbaseIntroSeen = true
+        if type(deps.writefile) == "function" then
+            pcall(deps.writefile, MARKER, "1")
+        end
+    end
+
+    function gate.shouldPlay(settings, resumed)
+        if not settings or not settings.Enabled or resumed then
+            return false
+        end
+        return not (settings.Once and gate.alreadySeen())
+    end
+
+    return gate
+end
+-- END INTRO GATE
+
+local introGate = createIntroGate({ memory = genv, isfile = isfile, writefile = writefile })
+
+-- After a teleport the intro is skipped, the connection toast is enough. With Intro.Once it plays only the first time.
+if introGate.shouldPlay(CONFIG.Intro, resume ~= nil) then
+    introGate.markPlayed()
     introActive = true
     task.spawn(function()
         local ok, err = pcall(playIntro)

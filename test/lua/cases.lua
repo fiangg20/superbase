@@ -735,6 +735,54 @@ do
     check("polling: Close posts /poll/close once", closes == 1, closes)
 end
 
+-- roblox/client.lua: intro gate ----------------------------------------------------------
+do
+    local f = assert(io.open("roblox/client.lua", "r"))
+    local source = f:read("*a")
+    f:close()
+    local section = source:match("%-%- BEGIN INTRO GATE(.-)%-%- END INTRO GATE")
+    check("intro gate: the section is found in client.lua", section ~= nil)
+    local make = assert(load(section .. "\nreturn createIntroGate", "=intro", "t", setmetatable({}, { __index = _G })))()
+
+    local files, memory = {}, {}
+    local deps = {
+        memory = memory,
+        isfile = function(name) return files[name] == true end,
+        writefile = function(name) files[name] = true end,
+    }
+    local gate = make(deps)
+    check("intro gate: the first time it plays", gate.shouldPlay({ Enabled = true, Once = true }, false) == true)
+    gate.markPlayed()
+    check("intro gate: the marker file is written", files["superbase-intro-seen.txt"] == true)
+    check("intro gate: it does not play again with Once", gate.shouldPlay({ Enabled = true, Once = true }, false) == false)
+    check("intro gate: without Once it always plays", gate.shouldPlay({ Enabled = true, Once = false }, false) == true)
+    check("intro gate: Enabled false never plays", gate.shouldPlay({ Enabled = false, Once = false }, false) == false)
+    check("intro gate: it is skipped after a teleport", make({ memory = {}, isfile = deps.isfile, writefile = deps.writefile }).shouldPlay({ Enabled = true, Once = false }, true) == false)
+
+    -- A new executor session still has the marker file.
+    local fresh = make({ memory = {}, isfile = deps.isfile, writefile = deps.writefile })
+    check("intro gate: the file remembers it across sessions", fresh.shouldPlay({ Enabled = true, Once = true }, false) == false)
+
+    -- Deleting the file shows the intro again.
+    files = {}
+    deps.isfile = function(name) return files[name] == true end
+    deps.writefile = function(name) files[name] = true end
+    local again = make({ memory = {}, isfile = deps.isfile, writefile = deps.writefile })
+    check("intro gate: deleting the file brings the intro back", again.shouldPlay({ Enabled = true, Once = true }, false) == true)
+
+    -- Without file functions it plays once per session, through the shared memory.
+    local mem = {}
+    local noFiles = make({ memory = mem })
+    check("intro gate: no file functions, first time plays", noFiles.shouldPlay({ Enabled = true, Once = true }, false) == true)
+    noFiles.markPlayed()
+    check("intro gate: no file functions, the memory keeps it for the session", make({ memory = mem }).shouldPlay({ Enabled = true, Once = true }, false) == false)
+
+    -- File functions that raise are survived.
+    local broken = make({ memory = {}, isfile = function() error("nope") end, writefile = function() error("nope") end })
+    check("intro gate: broken file functions do not stop the intro", broken.shouldPlay({ Enabled = true, Once = true }, false) == true and pcall(broken.markPlayed))
+    check("intro gate: the setting exists", source:find("Once = true,", 1, true) ~= nil)
+end
+
 -- roblox/client.lua: transport choice and settings ---------------------------------------
 do
     local f = assert(io.open("roblox/client.lua", "r"))

@@ -4,7 +4,7 @@
 
 Setup and starting the client:
 
-- Setup is `git clone`, `cd superbase`, `npm run setup`. The installer installs the dependency itself, and the bridge starts by itself when the AI needs it, so there is no separate `npm install` or `npm start` step. The setup prints the line for your executor at the end.
+- Setup is `git clone`, `cd superbase`, `npm run setup`. The installer installs the dependency itself, and the bridge starts by itself when the AI needs it, so there is no separate `npm install` step and `npm start` is optional. `npm start` still runs the bridge in a terminal with the styled screen, for people who want to run and watch it by hand. The setup prints the line for your executor at the end.
 - `roblox/loader.lua` (`npm run loader`): downloads the client with `game:HttpGet` and falls back to the executor's `request`, `http_request`, `syn.request` or `http.request` when `HttpGet` is blocked. It retries every 3 seconds until the bridge answers and never starts two loops.
 - `npm run autoexec` (also offered by `npm run setup`): puts the loader in your executor's autoexec folder. It finds the folder with a probe file that has a random name, written through the executor into its `workspace` folder. Superbase searches the disk for it, goes up from the workspace and looks for a folder with `autoexec` in its name. `--dir` gives the folder by hand, `--dry-run` and `--remove` are available.
 
@@ -21,6 +21,7 @@ Tools (23 tools became 24):
 
 Other:
 
+- The intro now plays only the first time (`Intro.Once`, on by default), remembered in `superbase-intro-seen.txt` in the executor's workspace, so autoexec does not replay it in every game. Delete the file or set `Intro.Once` to `false` to see it again.
 - The status line uses a colon instead of a dash (`connected: c1 (Player1), ...`).
 - New tests for the loader, the autoexec search (with a fake disk), HTTP polling (a real bridge and a fake polling client, plus the Lua side), the network mode and semantic search (with a fake Ollama). The Lua mock covers the polling protocol, remote blocking and `dump_scripts`.
 - The teleport of `character_control` keeps the character's pivot offset (a fix to the 1.3.1 behavior).

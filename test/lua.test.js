@@ -115,7 +115,8 @@ for (const spelling of ["queue_on_teleport", "queueonteleport", "syn.queue_on_te
   assert.ok(client.includes(spelling), `the client looks for ${spelling}`);
 }
 assert.ok(client.includes('type = "goodbye"') && /case "goodbye"/.test(bridge), "the client says goodbye and the bridge understands it");
-assert.ok(/not resume then/.test(client), "the intro is skipped after a teleport");
+assert.ok(/shouldPlay\(CONFIG\.Intro, resume ~= nil\)/.test(client), "the intro gate is told about a teleport resume, which skips the intro");
+assert.ok(/Once = true/.test(client), "the intro plays only once by default");
 assert.ok(client.includes("__SuperbaseResume"), "the queued script marks itself as a resume");
 
 console.log(`ALL LUA CHECKS PASSED (${files.length} files, ${used.size} snippets, version ${versions.package})`);
