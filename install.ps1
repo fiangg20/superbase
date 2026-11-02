@@ -1,7 +1,9 @@
 # Superbase installer for Windows PowerShell 5.1 and PowerShell 7.
 #
-# One line (read the script first if you want to, it is short):
-#   powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/fiangg20/superbase/main/install.ps1 | iex"
+# Download it, then run it (read the script first if you want to, it is short):
+#   irm https://raw.githubusercontent.com/fiangg20/superbase/main/install.ps1 -OutFile "$env:TEMP\superbase-install.ps1"
+#   powershell -NoProfile -ExecutionPolicy RemoteSigned -File "$env:TEMP\superbase-install.ps1"
+# The older one line form with "| iex" still works, but some antivirus programs flag that pattern.
 #
 # What it does:
 #   1. checks that Node.js 18 or newer is installed
@@ -99,7 +101,7 @@ try {
 
 Write-Host ''
 Say "Superbase is in $Dir"
-Say 'The bridge starts by itself when your AI needs it. To watch it in a terminal: npm start (in that folder).'
+Say 'The bridge starts by itself in the background when your AI needs it (stop it with npm run stop, turn that off with autostart: false in superbase.config.json). To watch it in a terminal: npm start (in that folder).'
 if ($env:SUPERBASE_START -eq '1') {
   Say 'Starting the bridge...'
   Push-Location $Dir

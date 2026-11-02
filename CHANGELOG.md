@@ -8,6 +8,10 @@ Setup and starting the client:
 - `roblox/loader.lua` (`npm run loader`): downloads the client with `game:HttpGet` and falls back to the executor's `request`, `http_request`, `syn.request` or `http.request` when `HttpGet` is blocked. It retries every 3 seconds until the bridge answers and never starts two loops.
 - `npm run autoexec` (also offered by `npm run setup`): puts the loader in your executor's autoexec folder. It finds the folder with a probe file that has a random name, written through the executor into its `workspace` folder. Superbase searches the disk for it, goes up from the workspace and looks for a folder with `autoexec` in its name. `--dir` gives the folder by hand, `--dry-run` and `--remove` are available.
 
+Windows install:
+
+- The Windows install command now downloads `install.ps1` to a file and runs it with `-File`, instead of `irm ... | iex` with `-ExecutionPolicy Bypass`. Microsoft Defender can flag that one line form on its command line alone (a machine learning detection such as `Trojan:Win32/Commando.A!ml`). The README also explains the alert and points to `git clone` or the ZIP plus `npm run setup`, which needs no script at all.
+
 Connection:
 
 - HTTP long polling for executors without `WebSocket` (or with it blocked). `CONFIG.Transport` is `auto` (default), `websocket` or `polling`, and `CONFIG.PollWait` sets the wait. New bridge routes: `POST /poll/hello`, `GET /poll/next`, `POST /poll/send`, `POST /poll/close`. `/clients` reports the transport of each client.

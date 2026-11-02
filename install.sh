@@ -81,7 +81,7 @@ set -e
 
 echo ""
 say "Superbase is in $DIR"
-say "The bridge starts by itself when your AI needs it. To watch it in a terminal: npm start (in that folder)."
+say "The bridge starts by itself in the background when your AI needs it (stop it with npm run stop, turn that off with autostart: false in superbase.config.json). To watch it in a terminal: npm start (in that folder)."
 if [ "${SUPERBASE_START:-}" = "1" ]; then
   say "Starting the bridge..."
   npm start

@@ -42,7 +42,7 @@ const INSTRUCTIONS = [
   "- Call roblox_status first in every session, and again whenever a tool fails. It actively pings the Roblox client.",
   "- Every tool result begins with a [Superbase] status line that shows the current connection state.",
   "- States: connected (all tools work); waiting_for_roblox (the bridge runs but no game is connected); unresponsive (a client is connected but does not answer: the game may be frozen, loading or closing); unknown_client (the client id you passed is not connected); bridge_offline (the bridge is not running and could not be started automatically: the hint says why); token_mismatch (the bridge and this MCP config disagree about the token).",
-  "- The bridge starts by itself when a tool needs it, so the user does not have to run npm start (it stays available for running the bridge by hand). A note in the status line says when that happened.",
+  "- The bridge starts by itself when a tool needs it, so the user does not have to run npm start (it stays available for running the bridge by hand). A note in the status line says when that happened. When that note appears, tell the user in plain words that the bridge now runs in the background, that it keeps running until they run npm run stop, and that autostart can be turned off with \"autostart\": false in superbase.config.json. Do not skip this, they have not seen the note unless you say it.",
   "- After a teleport the Roblox client reconnects by itself within a few seconds (when auto reconnect is on). If the state is waiting_for_roblox right after a teleport, call roblox_status again before asking the user to do anything.",
   "- When the state is waiting_for_roblox, the status line contains a one-line loadstring script. Show it to the user in a code block so they can run it in their executor, then wait for them.",
   "- When the state is not connected, do not retry in a loop. Tell the user what is missing and wait for them.",
@@ -180,7 +180,7 @@ async function autostartBridge() {
       autostart.result = result;
       autostart.at = Date.now();
       if (result.ok && result.started) {
-        autostart.notice = `[Superbase] The bridge was not running, so it was started in the background${result.pid ? ` (pid ${result.pid})` : ""}. Log: ${background.locations(process.env).log}`;
+        autostart.notice = `[Superbase] The bridge was not running, so it was started in the background${result.pid ? ` (pid ${result.pid})` : ""}. It keeps running after you close the AI client until you run npm run stop, and "autostart": false in superbase.config.json turns this off. Log: ${background.locations(process.env).log}`;
       }
       return result;
     })

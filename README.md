@@ -108,6 +108,8 @@ cd superbase
 npm run setup
 ```
 
+No git? Download the ZIP from the GitHub page, unzip it, open a terminal in the folder and run `npm run setup`.
+
 That is all. `npm run setup` installs the dependency, finds your AI clients and registers the MCP server in them. You do not need `npm install`, and `npm start` is optional: when the AI calls a tool and no bridge is running, the MCP server starts one in the background and tells the AI (and so you) that it did. At the end the setup prints the line to run in your executor, and offers to put the loader in your executor's autoexec folder, so the executor loads Superbase by itself in every game (see [Loader and autoexec](#loader-and-autoexec)).
 
 Restart your AI client once so it loads the change.
@@ -171,10 +173,13 @@ You do not have to remember the loader line. While no game is connected, every t
 
 The installer downloads Superbase, installs the one dependency and registers the MCP server in every supported AI client it finds on your computer, so you do not edit any config file by hand.
 
-**Windows (PowerShell or cmd)**
+**Windows (PowerShell)**
 
-```
-powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/fiangg20/superbase/main/install.ps1 | iex"
+Download the installer to a file, then run it. This avoids the `irm ... | iex` pattern, which some antivirus programs flag on sight (see the note below).
+
+```powershell
+irm https://raw.githubusercontent.com/fiangg20/superbase/main/install.ps1 -OutFile "$env:TEMP\superbase-install.ps1"
+powershell -NoProfile -ExecutionPolicy RemoteSigned -File "$env:TEMP\superbase-install.ps1"
 ```
 
 **macOS and Linux**
@@ -183,7 +188,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubus
 curl -fsSL https://raw.githubusercontent.com/fiangg20/superbase/main/install.sh | sh
 ```
 
-Piping a script into a shell runs whatever it contains, so read [`install.ps1`](install.ps1), [`install.sh`](install.sh) and [`scripts/install.js`](scripts/install.js) first if you want to know what happens. They are short.
+Running a downloaded script runs whatever it contains, so read [`install.ps1`](install.ps1), [`install.sh`](install.sh) and [`scripts/install.js`](scripts/install.js) first if you want to know what happens. They are short.
+
+**Antivirus note.** The one line form `powershell -ExecutionPolicy Bypass -Command "irm <url> | iex"` downloads and runs code in one step, which is exactly what real malware does too, so Microsoft Defender can flag the command line itself with a machine learning detection (for example `Trojan:Win32/Commando.A!ml`) even though the script is harmless. That is why the Windows command above downloads the file first. If you want to avoid scripts entirely, clone the repository (or download the ZIP from GitHub and unzip it) and run `npm run setup` inside the folder, as in the [Quick start](#quick-start). If Defender still flags it, check the alert, read the script, and report the detection as a false positive to Microsoft at https://www.microsoft.com/en-us/wdsi/filesubmission.
 
 The bootstrap script checks for Node.js 18 or newer, downloads the code into `%LOCALAPPDATA%\Superbase` (`~/.superbase` on macOS and Linux), runs `npm install` and then runs `scripts/install.js`. That script shows the clients it found as a checklist (arrow keys to move, space to tick, `a` for all, enter to confirm) and writes nothing before you confirm. Clients that are not installed are listed too, but unticked. Before it registers anything it installs the dependency (`npm install`) when `node_modules` is missing, so the server starts on the first try.
 
@@ -1277,6 +1284,7 @@ To add a tool that runs Lua in the game, put the code in `src/lua/<name>.lua` (i
 | `npm run autoexec` cannot find the folder | Run the one line in your executor inside a game first, then try again, or give the folder with `--dir`. |
 | `The bridge would listen on ..., which other computers can reach, and it has no token` | Set `SUPERBASE_TOKEN` (16 characters or more) or use `host` `127.0.0.1`. See [Several computers](#several-computers). |
 | `semantic_search` says Ollama is not reachable, or does not have the model | Start Ollama and run `ollama pull embeddinggemma`. See [Semantic search](#semantic-search). |
+| Windows Defender flags the install command (for example `Trojan:Win32/Commando.A!ml`) | It is a machine learning detection of the `irm ... | iex` command line, not of a file. Use the download-then-run form from [One line install](#one-line-install), or clone the repository and run `npm run setup`. |
 | Executor console shows `401 Unauthorized`, or a "Bridge closed the connection" notification | The bridge was started with a token. Load the client with `?token=<token>` or set `CONFIG.Token` in `client.lua` to the same value, or restart the bridge without a token. |
 | `Unable to connect`, or a "Bridge not found" notification | The bridge is not running, or the port differs from `CONFIG.Url`. |
 | The port is already in use | Pick another port: set `SUPERBASE_PORT` for the bridge and the MCP server, then use the loader the bridge prints. |

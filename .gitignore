@@ -10,6 +10,10 @@ node_modules/
 *.local.*
 claude_desktop_config.json
 
+# Your own Superbase settings and the background bridge's state and log
+superbase.config.json
+.superbase/
+
 # Logs
 *.log
 npm-debug.log*

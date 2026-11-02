@@ -318,7 +318,7 @@ function runPowerShell(script, env, timeoutMs) {
 
     const child = spawn(
       "powershell.exe",
-      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", file],
+      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "RemoteSigned", "-File", file],
       { env: { ...process.env, ...env }, windowsHide: true },
     );
 

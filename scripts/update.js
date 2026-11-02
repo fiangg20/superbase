@@ -14,7 +14,7 @@ const background = require("../src/background");
 const updateCheck = require("../src/update-check");
 
 const INSTALL_HINT = {
-  windows: 'powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/fiangg20/superbase/main/install.ps1 | iex"',
+  windows: 'irm https://raw.githubusercontent.com/fiangg20/superbase/main/install.ps1 -OutFile "$env:TEMP\\superbase-install.ps1"; powershell -NoProfile -ExecutionPolicy RemoteSigned -File "$env:TEMP\\superbase-install.ps1"',
   unix: "curl -fsSL https://raw.githubusercontent.com/fiangg20/superbase/main/install.sh | sh",
 };
 
