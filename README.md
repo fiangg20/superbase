@@ -106,6 +106,7 @@ Because the bridge stores logs, the AI can still read what happened after you le
 git clone https://github.com/fiangg20/superbase.git
 cd superbase
 npm run setup
+npm start
 ```
 
 That is all. `npm run setup` installs the dependency, finds your AI clients and registers the MCP server in them. You do not need `npm install` or `npm start`: when the AI calls a tool and no bridge is running, the MCP server starts one in the background and tells the AI (and so you) that it did. At the end the setup prints the line to run in your executor, and offers to put the loader in your executor's autoexec folder, so the executor loads Superbase by itself in every game (see [Loader and autoexec](#loader-and-autoexec)).
