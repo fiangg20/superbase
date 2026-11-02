@@ -16,7 +16,7 @@
 
 Superbase is a local [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that connects AI assistants to running Roblox sessions through your executor. The AI can read the console and script errors, explore the instance tree with CSS-like selectors, read and search script sources, spy on remote calls, operate the GUI, take screenshots, see the players, move the character, measure performance, compare snapshots of the game, change properties and run Lua. It always knows whether Roblox is actually connected, and you can watch everything in a local web dashboard.
 
-- **One command to set up.** `npm run setup` installs the one dependency and registers the MCP server in your AI clients. There is no separate `npm install` or `npm start`: the bridge starts by itself when the AI needs it.
+- **One command to set up.** `npm run setup` installs the one dependency and registers the MCP server in your AI clients. There is no separate `npm install`: the bridge starts by itself when the AI needs it.
 - **Connection aware.** Every tool result starts with a status line. When the game is not connected, the AI gets the exact script you need to run and tells you.
 - **24 tools** for logs, errors, inspection, selectors, hierarchy trees, script listing, text search and search by meaning, remote spying and blocking, GUI interaction, screenshots, players and characters, performance stats, snapshots and diffs, saved Lua recipes, properties and code execution.
 - **Stays connected through teleports.** The client loads itself again in the new place, so the AI does not lose the game when you change servers.
