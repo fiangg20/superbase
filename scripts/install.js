@@ -783,14 +783,14 @@ async function run(argv, ctx = {}) {
       out(`         ${ui.cyan(oneLiner(settings.port, connectHost(settings.host), settings.token))}`);
     }
     out(`    ${ui.cyan("3")}  Ask the AI: ${ui.dim('"Check the Roblox connection."')}`);
-    out(`       ${ui.dim("The bridge starts by itself in the background when the AI needs it (stop it with npm run stop, or turn that off with autostart: false). npm start is optional, for running it by hand.")}`);
+    out(`       ${ui.dim("The bridge starts by itself in the background when the AI needs it (stop it from the tray icon on Windows or with npm run stop, or turn that off with autostart: false). npm start is optional, for running it by hand.")}`);
     if (!autoexecDone) out(`       ${ui.dim("Run it automatically in every game: npm run autoexec")}`);
     out("");
   } else if (!fancy) {
     if (changed > 0) out("Restart the AI client so it loads the change.");
     if (registered) {
       if (!autoexecDone) out(`Then run this in your executor, inside a game: ${oneLiner(settings.port, connectHost(settings.host), settings.token)}`);
-      out("The bridge starts by itself in the background when the AI needs it. Stop it with npm run stop, turn that off with autostart: false in superbase.config.json. Ask the AI to check the Roblox connection.");
+      out("The bridge starts by itself in the background when the AI needs it. Stop it from the tray icon on Windows or with npm run stop, turn that off with autostart: false in superbase.config.json. Ask the AI to check the Roblox connection.");
     }
   } else if (changed > 0) {
     out(`  ${ui.dim("Restart the AI client so it loads the change.")}`);

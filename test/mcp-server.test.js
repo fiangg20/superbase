@@ -111,6 +111,11 @@ function decodeSnippet(code) {
     "move the local character": "character_control",
     "performance numbers of the running game": "stats",
     "save the state of part of the game": "snapshot",
+    "look inside running code": "inspect_code",
+    "call a method on an instance": "call_instance",
+    "wait until an instance exists": "wait_for_instance",
+    "record the HTTP requests": "http_spy",
+    "show a toast in the game window": "notify",
     "-- Recipe: List remotes": "recipe:list-remotes",
     "-- Recipe: Test recipe": "recipe:test-recipe",
   };
@@ -207,6 +212,7 @@ async function main() {
 
     res = await mcp.rpc("tools/list");
     assert.deepStrictEqual(res.result.tools.map((tool) => tool.name).sort(), [
+      "call_instance",
       "character_control",
       "clear_logs",
       "execute_lua",
@@ -217,22 +223,27 @@ async function main() {
       "get_logs",
       "get_script_source",
       "gui_interact",
+      "http_spy",
+      "inspect_code",
       "inspect_instance",
       "list_clients",
       "list_scripts",
+      "notify",
       "player_info",
       "recipes",
       "remote_spy",
       "roblox_status",
+      "run_file",
       "screenshot",
       "search_scripts",
       "semantic_search",
       "set_property",
       "snapshot",
       "stats",
+      "wait_for_instance",
       "wait_for_log",
     ]);
-    assert.strictEqual(res.result.tools.length, 24);
+    assert.strictEqual(res.result.tools.length, 30);
     for (const tool of res.result.tools) {
       assert.strictEqual(tool.inputSchema.type, "object");
       assert.strictEqual(tool.run, undefined, "implementation must not leak into tools/list");
@@ -242,10 +253,11 @@ async function main() {
       assert.ok(tool.description.length > 40, `${tool.name} needs a real description`);
     }
     const withClient = res.result.tools.filter((tool) => tool.inputSchema.properties.client).map((tool) => tool.name);
-    for (const name of ["execute_lua", "get_game_info", "inspect_instance", "get_hierarchy", "find_instances", "list_scripts", "get_script_source", "search_scripts", "remote_spy", "gui_interact", "set_property", "roblox_status", "get_logs", "get_errors", "wait_for_log", "clear_logs", "player_info", "character_control", "stats", "snapshot", "recipes", "semantic_search"]) {
+    for (const name of ["execute_lua", "get_game_info", "inspect_instance", "get_hierarchy", "find_instances", "list_scripts", "get_script_source", "search_scripts", "remote_spy", "gui_interact", "set_property", "roblox_status", "get_logs", "get_errors", "wait_for_log", "clear_logs", "player_info", "character_control", "stats", "snapshot", "recipes", "semantic_search", "inspect_code", "call_instance", "wait_for_instance", "http_spy", "notify", "run_file"]) {
       assert.ok(withClient.includes(name), `${name} must accept a client id`);
     }
     assert.ok(instructions.includes("list_clients") && instructions.includes("remote_spy") && instructions.includes("semantic_search"), "instructions describe the new tools");
+    for (const name of ["inspect_code", "call_instance", "wait_for_instance", "http_spy", "notify", "run_file"]) assert.ok(instructions.includes(name), `instructions mention ${name}`);
 
     // State: bridge_offline (the bridge is not running yet).
     res = await mcp.call("roblox_status", {});
@@ -598,6 +610,112 @@ async function main() {
     res = await mcp.call("gui_interact", { action: "list", limit: 9999 });
     assert.strictEqual(bodyOf(res).value.args.limit, 200);
 
+
+    // Reverse engineering and small tools (1.4.0).
+    res = await mcp.call("inspect_code", { action: "upvalues", path: "game.ReplicatedStorage.Utils", function_name: "addCoins", limit: 9999 });
+    body = bodyOf(res).value;
+    assert.strictEqual(body.snippet, "inspect_code");
+    assert.deepStrictEqual(body.args, { action: "upvalues", path: "game.ReplicatedStorage.Utils", function_name: "addCoins", limit: 100 });
+    res = await mcp.call("inspect_code", { action: "gc", name_contains: "buy", kind: "function" });
+    assert.strictEqual(bodyOf(res).value.args.name_contains, "buy");
+    res = await mcp.call("inspect_code", { action: "upvalues" });
+    assert.strictEqual(res.result.isError, true, "upvalues needs a path");
+    res = await mcp.call("inspect_code", { action: "connections", path: "game.A.B", signal: "Touched" });
+    assert.strictEqual(bodyOf(res).value.args.signal, "Touched");
+    res = await mcp.call("inspect_code", { action: "explode" });
+    assert.strictEqual(res.result.isError, true);
+
+    res = await mcp.call("call_instance", { action: "fire_remote", path: "game.ReplicatedStorage.Buy", args: ["sword", { __type: "Vector3", x: 1, y: 2, z: 3 }] });
+    body = bodyOf(res).value;
+    assert.strictEqual(body.snippet, "call_instance");
+    assert.deepStrictEqual(body.args.args, ["sword", { __type: "Vector3", x: 1, y: 2, z: 3 }]);
+    res = await mcp.call("call_instance", { action: "method", path: "game.Workspace" });
+    assert.ok(res.result.isError && textOf(res).includes("'method' is required"), textOf(res));
+    res = await mcp.call("call_instance", { action: "fire_signal", path: "game.Workspace.Part" });
+    assert.ok(res.result.isError && textOf(res).includes("'signal' is required"), textOf(res));
+    res = await mcp.call("call_instance", { action: "fire_remote", path: "game.A.B", args: ["a", null, "b"] });
+    assert.ok(res.result.isError && textOf(res).includes("null is not supported"), textOf(res));
+    res = await mcp.call("call_instance", { action: "fire_remote", path: "game.A.B", args: "x" });
+    assert.ok(res.result.isError && textOf(res).includes("must be a list"), textOf(res));
+
+    res = await mcp.call("wait_for_instance", { path: "game.Workspace.Map", timeout: 999, class_name: "Model" });
+    body = bodyOf(res).value;
+    assert.strictEqual(body.snippet, "wait_for_instance");
+    assert.deepStrictEqual(body.args, { path: "game.Workspace.Map", timeout: 60, class_name: "Model" }, "the timeout is clamped");
+    res = await mcp.call("wait_for_instance", { path: "game.Workspace.Map" });
+    assert.strictEqual(bodyOf(res).value.args.timeout, 10, "the default timeout is ten seconds");
+
+    res = await mcp.call("http_spy", { action: "start", max_calls: 99999, max_body: 99999, url_contains: "api." });
+    body = bodyOf(res).value;
+    assert.strictEqual(body.snippet, "http_spy");
+    assert.strictEqual(body.args.max_calls, 1000);
+    assert.strictEqual(body.args.max_body, 4000);
+    res = await mcp.call("http_spy", { action: "get", since_id: 3, method: "POST", limit: 500 });
+    assert.deepStrictEqual([bodyOf(res).value.args.method, bodyOf(res).value.args.limit, bodyOf(res).value.args.since_id], ["POST", 100, 3]);
+    res = await mcp.call("http_spy", { action: "explode" });
+    assert.strictEqual(res.result.isError, true);
+
+    res = await mcp.call("notify", { title: "Done", text: "All scripts dumped", kind: "success" });
+    body = bodyOf(res).value;
+    assert.strictEqual(body.snippet, "notify");
+    assert.deepStrictEqual(body.args, { title: "Done", text: "All scripts dumped", kind: "success" });
+    res = await mcp.call("notify", { title: "" });
+    assert.strictEqual(res.result.isError, true);
+
+    // run_file reads a file on this computer and runs its code.
+    const luaDir = fs.mkdtempSync(path.join(os.tmpdir(), "superbase-runfile-"));
+    const luaFile = path.join(luaDir, "hello.lua");
+    fs.writeFileSync(luaFile, 'print("from a file")\nreturn 7\n');
+    res = await mcp.call("run_file", { path: luaFile });
+    assert.strictEqual(res.result.isError, false, textOf(res));
+    assert.ok(textOf(res).includes('ran: print(\\"from a file\\")') || textOf(res).includes('from a file'), "the file's code reaches the executor");
+    assert.strictEqual(bodyOf(res).file, luaFile);
+    assert.strictEqual(bodyOf(res).bytes, fs.statSync(luaFile).size);
+    res = await mcp.call("run_file", { path: path.join(luaDir, "missing.lua") });
+    assert.ok(res.result.isError && textOf(res).includes("There is no file"), textOf(res));
+    fs.writeFileSync(path.join(luaDir, "notes.md"), "x");
+    res = await mcp.call("run_file", { path: path.join(luaDir, "notes.md") });
+    assert.ok(res.result.isError && textOf(res).includes("not a .lua"), textOf(res));
+    fs.writeFileSync(path.join(luaDir, "big.lua"), "-- ".padEnd(600 * 1024, "x"));
+    res = await mcp.call("run_file", { path: path.join(luaDir, "big.lua") });
+    assert.ok(res.result.isError && textOf(res).includes("limit"), textOf(res));
+    fs.writeFileSync(path.join(luaDir, "empty.lua"), "  \n");
+    res = await mcp.call("run_file", { path: path.join(luaDir, "empty.lua") });
+    assert.ok(res.result.isError && textOf(res).includes("empty"), textOf(res));
+    res = await mcp.call("run_file", { path: luaDir });
+    assert.ok(res.result.isError, "a folder is refused");
+    fs.rmSync(luaDir, { recursive: true, force: true });
+
+
+    // Recipe sharing: the checks that need no network. (The download itself is covered by recipe-import.test.js.)
+    res = await mcp.call("recipes", { action: "preview_import", url: "https://evil.example.com/a.lua" });
+    assert.ok(res.result.isError && textOf(res).includes("not on the list"), textOf(res));
+    res = await mcp.call("recipes", { action: "preview_import", url: "http://raw.githubusercontent.com/o/r/main/a.lua" });
+    assert.ok(res.result.isError && textOf(res).includes("https"), textOf(res));
+    res = await mcp.call("recipes", { action: "preview_import" });
+    assert.ok(res.result.isError, "preview_import needs a url");
+    res = await mcp.call("recipes", { action: "import", url: "https://raw.githubusercontent.com/o/r/main/a.lua" });
+    assert.ok(res.result.isError && textOf(res).includes("confirm true"), "import needs confirm");
+    res = await mcp.call("recipes", { action: "import", url: "https://raw.githubusercontent.com/o/r/main/a.lua", confirm: "yes" });
+    assert.ok(res.result.isError && textOf(res).includes("confirm true"), "only the boolean true confirms");
+    res = await mcp.call("recipes", { action: "import", url: "https://evil.example.com/a.lua", confirm: true });
+    assert.ok(res.result.isError && textOf(res).includes("not on the list"), "a refused host is refused with confirm too");
+    res = await mcp.call("recipes", { action: "explode" });
+    assert.ok(res.result.isError && textOf(res).includes("preview_import"), "the error lists the actions");
+
+    // Prompts.
+    res = await mcp.rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "1" } });
+    assert.deepStrictEqual(res.result.capabilities, { tools: {}, prompts: {} });
+    res = await mcp.rpc("prompts/list");
+    assert.deepStrictEqual(res.result.prompts.map((prompt) => prompt.name), ["diagnose", "find-code", "explain-game", "trace-remote", "performance-check", "why-error"]);
+    assert.ok(res.result.prompts.find((prompt) => prompt.name === "find-code").arguments[0].required === true);
+    res = await mcp.rpc("prompts/get", { name: "find-code", arguments: { what: "gives coins" } });
+    assert.ok(res.result.messages[0].content.text.includes("gives coins") && res.result.messages[0].role === "user");
+    res = await mcp.rpc("prompts/get", { name: "find-code", arguments: {} });
+    assert.strictEqual(res.error.code, -32602, "a missing argument is an invalid params error");
+    res = await mcp.rpc("prompts/get", { name: "nope" });
+    assert.strictEqual(res.error.code, -32602);
+
     // Screenshots need Windows, so the Linux test machine gets a clear error from the bridge.
     res = await mcp.call("screenshot", {});
     assert.strictEqual(res.result.isError, true);
@@ -812,6 +930,41 @@ async function main() {
       assert.ok(textOf(res).includes("waiting_for_roblox"), textOf(res));
       assert.strictEqual(bodyOf(res).mode, "token");
     }
+
+    // Safe mode: tools that change the game are hidden or refused, reading still works.
+    const safe = startMcp(PORT, { SUPERBASE_READ_ONLY: "1" });
+    children.push(safe.child);
+    res = await safe.rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "1" } });
+    assert.ok(res.result.instructions.includes("Safe mode is ON"), "the instructions say safe mode is on");
+    res = await safe.rpc("tools/list");
+    const safeNames = res.result.tools.map((tool) => tool.name);
+    for (const hidden of ["execute_lua", "set_property", "character_control"]) assert.ok(!safeNames.includes(hidden), `${hidden} is hidden in safe mode`);
+    for (const shown of ["get_hierarchy", "search_scripts", "remote_spy", "gui_interact", "recipes", "roblox_status"]) assert.ok(safeNames.includes(shown), `${shown} stays in safe mode`);
+    for (const hidden of ["call_instance", "run_file"]) assert.ok(!safeNames.includes(hidden), `${hidden} is hidden in safe mode`);
+    for (const shown of ["inspect_code", "wait_for_instance", "http_spy", "notify"]) assert.ok(safeNames.includes(shown), `${shown} stays in safe mode`);
+    res = await safe.call("execute_lua", { code: "return 1" });
+    assert.strictEqual(res.result.isError, true);
+    assert.ok(textOf(res).includes("Safe mode is on"), textOf(res));
+    res = await safe.call("remote_spy", { action: "block", remotes: ["Buy"] });
+    assert.ok(res.result.isError && textOf(res).includes("Safe mode is on"), "blocking is refused");
+    res = await safe.call("gui_interact", { action: "click", path: "game.A.B" });
+    assert.ok(res.result.isError && textOf(res).includes("Safe mode is on"), "clicking is refused");
+    res = await safe.call("recipes", { action: "save", name: "x-recipe", code: "return 1" });
+    assert.ok(res.result.isError && textOf(res).includes("Safe mode is on"), "saving a recipe is refused");
+    res = await safe.call("recipes", { action: "run", name: "list-remotes" });
+    assert.ok(res.result.isError && textOf(res).includes("Safe mode is on"), "running a recipe is refused");
+    res = await safe.call("recipes", { action: "import", url: "https://raw.githubusercontent.com/o/r/main/a.lua", confirm: true });
+    assert.ok(res.result.isError && textOf(res).includes("Safe mode is on"), "importing a recipe is refused");
+    res = await safe.call("recipes", { action: "preview_import", url: "https://evil.example.com/a.lua" });
+    assert.ok(res.result.isError && !textOf(res).includes("Safe mode is on"), "previewing is not a write, the host check answers");
+    res = await safe.rpc("prompts/list");
+    assert.strictEqual(res.result.prompts.length, 6, "prompts stay in safe mode");
+    res = await safe.call("recipes", { action: "list" });
+    assert.ok(!res.result.isError, "listing recipes still works");
+    res = await safe.call("remote_spy", { action: "status" });
+    assert.ok(textOf(res).includes("Safe mode is on: tools that change") || !res.result.isError, "reading tools run");
+    res = await safe.call("get_hierarchy", { path: "game" });
+    assert.ok(!res.result.isError || !textOf(res).includes("Safe mode is on, "), "read tools are not refused");
 
     console.log("ALL SUPERBASE CHECKS PASSED");
   } finally {

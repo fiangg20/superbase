@@ -169,7 +169,7 @@ function writeRecord(env, root, data) {
 function writeLoader(dir, settings, dryRun) {
   const file = path.join(dir, AUTOEXEC_NAME);
   if (dryRun) return { file, written: false };
-  fs.writeFileSync(file, render(settings.port, connectHost(settings.host), undefined, settings.token));
+  fs.writeFileSync(file, render(settings.port, connectHost(settings.host), undefined, settings.token, { autoexec: true }));
   return { file, written: true };
 }
 

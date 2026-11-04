@@ -114,6 +114,7 @@ async function main() {
   assert.strictEqual(result.file, loader);
   const text = fs.readFileSync(loader, "utf8");
   assert.ok(text.includes(`local BRIDGE = "127.0.0.1:${port}"`) && text.includes("request"), "the loader has the right port");
+  assert.ok(text.includes("local AUTOEXEC = true"), "the autoexec copy skips queue_on_teleport in the client");
   assert.deepStrictEqual(fs.readdirSync(behaviour.write), [], "the probe file is deleted");
   assert.ok(/superbase-probe-[0-9a-f]{12}\.txt/.test(behaviour.codes[0]) && behaviour.codes[0].includes('type(writefile) ~= "function"'));
   assert.strictEqual(autoexec.readRecord({ SUPERBASE_HOME: home }).dir, path.dirname(loader));

@@ -8,6 +8,7 @@
 --   args.class_name        "Script", "LocalScript" or "ModuleScript", default all
 --   args.include_hidden    also dump nil parented instances and loaded modules
 --   args.budget_seconds    stop the page after this many seconds (default 15)
+--   args.refresh           decompile again instead of using the cached source (default false)
 -- Scripts are sorted by path, so the same offset means the same script in the next call.
 -- Returns placeId, total, offset, nextOffset (nil on the last page), scripts { path, className, source, truncated }
 -- and unreadable (scripts that could not be decompiled).
@@ -103,10 +104,26 @@ local function looksLikeDecompilerError(text)
         or string.find(head, "<!doctype html", 1, true) ~= nil
 end
 
+-- Decompiling is slow, so the results are kept in the executor's global table. The keys are weak, so a script that
+-- is destroyed disappears from the cache. args.refresh = true decompiles again.
+local cacheOwner = (getgenv and getgenv()) or _G
+local sourceCache = cacheOwner.__SuperbaseSources
+if type(sourceCache) ~= "table" then
+    sourceCache = setmetatable({}, { __mode = "k" })
+    cacheOwner.__SuperbaseSources = sourceCache
+end
+local refreshCache = args.refresh == true
+local cacheHits = 0
+
 local function readSource(instance)
+    if not refreshCache and sourceCache[instance] then
+        cacheHits = cacheHits + 1
+        return sourceCache[instance]
+    end
     if type(decompile) == "function" then
         local ok, result = pcall(decompile, instance)
         if ok and type(result) == "string" and #result > 0 and not looksLikeDecompilerError(result) then
+            sourceCache[instance] = result
             return result
         end
     end
@@ -157,4 +174,5 @@ return {
     nextOffset = index <= total and (index - 1) or nil,
     scripts = scripts,
     unreadable = unreadable,
+    fromCache = cacheHits,
 }

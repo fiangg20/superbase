@@ -28,6 +28,8 @@ const SPEC = {
   recipesDir: ["string", () => true, ["SUPERBASE_RECIPES"], ""],
   screenshotMaxWidth: ["integer", (v) => v >= 320 && v <= 1920, ["SUPERBASE_SCREENSHOT_WIDTH"], 1280],
   screenshotFocus: ["boolean", () => true, ["SUPERBASE_SCREENSHOT_FOCUS"], true],
+  tray: ["boolean", () => true, ["SUPERBASE_TRAY"], true],
+  readOnly: ["boolean", () => true, ["SUPERBASE_READ_ONLY"], false],
   ollamaUrl: ["string", (v) => /^https?:\/\/\S+$/.test(v), ["SUPERBASE_OLLAMA_URL"], "http://127.0.0.1:11434"],
   embedModel: ["string", (v) => v.trim() !== "", ["SUPERBASE_EMBED_MODEL"], "embeddinggemma"],
 };

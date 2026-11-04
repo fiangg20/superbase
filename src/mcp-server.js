@@ -14,8 +14,10 @@ const { loadSettings, isLocalHost, connectHost } = require("./config");
 const background = require("./background");
 const recipeStore = require("./recipes");
 const semantic = require("./semantic");
+const recipeImport = require("./recipe-import");
+const prompts = require("./prompts");
 
-const VERSION = "1.3.2";
+const VERSION = "1.4.0";
 const SETTINGS = loadSettings(process.env);
 const PORT = SETTINGS.port;
 const TOKEN = SETTINGS.token;
@@ -42,7 +44,7 @@ const INSTRUCTIONS = [
   "- Call roblox_status first in every session, and again whenever a tool fails. It actively pings the Roblox client.",
   "- Every tool result begins with a [Superbase] status line that shows the current connection state.",
   "- States: connected (all tools work); waiting_for_roblox (the bridge runs but no game is connected); unresponsive (a client is connected but does not answer: the game may be frozen, loading or closing); unknown_client (the client id you passed is not connected); bridge_offline (the bridge is not running and could not be started automatically: the hint says why); token_mismatch (the bridge and this MCP config disagree about the token).",
-  "- The bridge starts by itself when a tool needs it, so the user does not have to run npm start (it stays available for running the bridge by hand). A note in the status line says when that happened. When that note appears, tell the user in plain words that the bridge now runs in the background, that it keeps running until they run npm run stop, and that autostart can be turned off with \"autostart\": false in superbase.config.json. Do not skip this, they have not seen the note unless you say it.",
+  "- The bridge starts by itself when a tool needs it, so the user does not have to run npm start (it stays available for running the bridge by hand). A note in the status line says when that happened. When that note appears, tell the user in plain words that the bridge now runs in the background, that it keeps running until they stop it (on Windows: right-click the Superbase icon in the tray and choose Stop Superbase; anywhere: npm run stop), and that autostart can be turned off with \"autostart\": false in superbase.config.json. Do not skip this, they have not seen the note unless you say it.",
   "- After a teleport the Roblox client reconnects by itself within a few seconds (when auto reconnect is on). If the state is waiting_for_roblox right after a teleport, call roblox_status again before asking the user to do anything.",
   "- When the state is waiting_for_roblox, the status line contains a one-line loadstring script. Show it to the user in a code block so they can run it in their executor, then wait for them.",
   "- When the state is not connected, do not retry in a loop. Tell the user what is missing and wait for them.",
@@ -60,13 +62,15 @@ const INSTRUCTIONS = [
   "- stats measures FPS (average, minimum, 1% low), stutters, memory, ping and world size, with short notes on what looks wrong. snapshot saves the state of part of the tree and later reports what was added, removed or changed, which is the way to see the effect of an action.",
   "- semantic_search finds code by meaning with a local Ollama: index the game once (repeat with offset until done is true), then search with a plain description. It needs Ollama running with the embedding model pulled, and says what is missing. Use search_scripts for exact text.",
   "- recipes lists, runs and saves reusable Lua scripts (a folder of .lua files with a header). Check the list before you write a script for a common task, and save a script as a recipe when the user will want it again.",
+  "- Reverse engineering: inspect_code reads the upvalues and constants of a script or of a module function, searches the garbage collector for functions and tables, and lists the handlers connected to a signal. http_spy records the HTTP requests that scripts send (secrets are redacted): start it, let the action happen, read with get. get_script_source, search_scripts and dump results come from a cache in the executor, pass refresh to decompile again.",
+  "- call_instance calls a method, fires a RemoteEvent or RemoteFunction, or fires a signal, with Roblox values written as __type objects. wait_for_instance waits until a path exists, for example after a teleport. run_file runs a .lua file from the user's computer in the game. notify shows a short toast in the Roblox window, for example when a long task is finished.",
   "- To check the effect of an action, use execute_lua with capture_logs, or wait_for_log to wait for a specific console line.",
   "- Logs and errors are stored by the bridge, so get_logs and get_errors still work while waiting_for_roblox.",
   "",
   "Selector syntax for find_instances: Type, #Name, [property=value], descendants separated by a space, direct children with >. Examples: RemoteEvent, Model > Part, Part[Anchored=false], TextButton#Play, Frame TextLabel[Text*='coins']. Operators: = != *= (contains) ^= (starts with) $= (ends with) < <= > >=.",
   "",
   "Safety:",
-  "- execute_lua, set_property, gui_interact (click, set_text, trigger) and remote_spy change or observe the running game with the executor's full permissions. Only do what the user asked for, and explain anything that changes the game or the user's files before you do it. character_control moves the player and recipes (save) writes a file in the recipes folder, so treat them the same way.",
+  "- execute_lua, run_file, call_instance, set_property, gui_interact (click, set_text, trigger), remote_spy and http_spy change or observe the running game with the executor's full permissions. Only do what the user asked for, and explain anything that changes the game or the user's files before you do it. character_control moves the player and recipes (save) writes a file in the recipes folder, so treat them the same way.",
   "- If the bridge runs on another computer (the host setting), it is never started automatically: tell the user to start it there.",
   "- Instance paths are dotted and start at game. Instance names that contain a dot cannot be addressed.",
 ].join("\n");
@@ -180,7 +184,7 @@ async function autostartBridge() {
       autostart.result = result;
       autostart.at = Date.now();
       if (result.ok && result.started) {
-        autostart.notice = `[Superbase] The bridge was not running, so it was started in the background${result.pid ? ` (pid ${result.pid})` : ""}. It keeps running after you close the AI client until you run npm run stop, and "autostart": false in superbase.config.json turns this off. Log: ${background.locations(process.env).log}`;
+        autostart.notice = `[Superbase] The bridge was not running, so it was started in the background${result.pid ? ` (pid ${result.pid})` : ""}. It keeps running after you close the AI client until you stop it (on Windows with Stop Superbase in the tray icon, or with npm run stop), and "autostart": false in superbase.config.json turns this off. Log: ${background.locations(process.env).log}`;
       }
       return result;
     })
@@ -456,6 +460,31 @@ async function semanticAction(args, ctx) {
   };
 }
 
+// run_file: the file must be a small text file with a Lua extension.
+const MAX_LUA_FILE_BYTES = 500 * 1024;
+function readLuaFile(requested) {
+  const expanded = requested === "~" || requested.startsWith("~/") || requested.startsWith("~\\")
+    ? path.join(require("os").homedir(), requested.slice(1))
+    : requested;
+  const resolved = path.resolve(expanded);
+  if (![".lua", ".luau", ".txt"].includes(path.extname(resolved).toLowerCase())) {
+    throw new Error(`${resolved} is not a .lua, .luau or .txt file.`);
+  }
+  let stat;
+  try {
+    stat = fs.statSync(resolved);
+  } catch {
+    throw new Error(`There is no file at ${resolved}.`);
+  }
+  if (!stat.isFile()) throw new Error(`${resolved} is not a file.`);
+  if (stat.size > MAX_LUA_FILE_BYTES) {
+    throw new Error(`${resolved} is ${Math.ceil(stat.size / 1024)} KB, more than the limit of ${MAX_LUA_FILE_BYTES / 1024} KB.`);
+  }
+  const source = fs.readFileSync(resolved, "utf8");
+  if (source.trim().length === 0) throw new Error(`${resolved} is empty.`);
+  return { path: resolved, source, bytes: stat.size };
+}
+
 function requirePath(args) {
   if (typeof args.path !== "string" || args.path.length === 0) {
     throw new Error("'path' must be a non-empty string.");
@@ -630,6 +659,7 @@ const tools = [
       additionalProperties: false,
     },
     annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+    writes: true,
     needsRoblox: true,
     run: async (args, ctx) => {
       if (typeof args.code !== "string" || args.code.length === 0) {
@@ -806,7 +836,7 @@ const tools = [
     name: "get_script_source",
     title: "Read a script's source",
     description:
-      "Read the source code of a Script, LocalScript or ModuleScript by dotted path. It uses the executor's decompile when available and falls back to the Source property. Long sources are cut at max_chars. Requires the connected state.",
+      "Read the source code of a Script, LocalScript or ModuleScript by dotted path. It uses the executor's decompile when available and falls back to the Source property. Decompiled sources are cached in the executor (fromCache in the result, refresh decompiles again). Long sources are cut at max_chars. Requires the connected state.",
     inputSchema: {
       type: "object",
       properties: {
@@ -817,6 +847,7 @@ const tools = [
           maximum: 40000,
           description: "Maximum number of characters to return (default 20000).",
         },
+        refresh: { type: "boolean", description: "Decompile again instead of using the cached source (default false)." },
         client: CLIENT_PROPERTY,
       },
       required: ["path"],
@@ -830,6 +861,7 @@ const tools = [
         {
           path: requirePath(args),
           max_chars: clampInt(args.max_chars, 100, 40000, 20000),
+          refresh: args.refresh === true,
         },
         // Decompiling through an online service can be slow.
         { ...ctx, timeoutMs: 40000 },
@@ -839,7 +871,7 @@ const tools = [
     name: "search_scripts",
     title: "Search inside scripts",
     description:
-      "Search the source code of the game's scripts, like grep. Modes: text (exact text, default), pattern (a Lua pattern, always case sensitive) and words (every word must appear, scripts are ranked by how often they match). It decompiles the scripts, which can be slow, so it stops after budget_seconds and reports how many scripts it searched. Narrow it with root or class_name for speed. Requires the connected state.",
+      "Search the source code of the game's scripts, like grep. Modes: text (exact text, default), pattern (a Lua pattern, always case sensitive) and words (every word must appear, scripts are ranked by how often they match). It decompiles the scripts, which can be slow (results are cached in the executor, set refresh to decompile again), so it stops after budget_seconds and reports how many scripts it searched. Narrow it with root or class_name for speed. Requires the connected state.",
     inputSchema: {
       type: "object",
       properties: {
@@ -853,6 +885,7 @@ const tools = [
         max_matches: { type: "integer", minimum: 1, maximum: 200, description: "Maximum matches to return (default 40)." },
         max_scripts: { type: "integer", minimum: 1, maximum: 500, description: "Maximum number of scripts to search (default 150)." },
         budget_seconds: { type: "integer", minimum: 2, maximum: 60, description: "Stop searching after this many seconds (default 20)." },
+        refresh: { type: "boolean", description: "Decompile the scripts again instead of using cached sources (default false)." },
         client: CLIENT_PROPERTY,
       },
       required: ["query"],
@@ -878,6 +911,7 @@ const tools = [
           max_matches: clampInt(args.max_matches, 1, 200, 40),
           max_scripts: clampInt(args.max_scripts, 1, 500, 150),
           budget_seconds: budget,
+          refresh: args.refresh === true,
         },
         { ...ctx, timeoutMs: (budget + 10) * 1000 },
       );
@@ -946,6 +980,7 @@ const tools = [
       additionalProperties: false,
     },
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    writes: (args) => args.action === "block" || args.action === "unblock",
     needsRoblox: true,
     run: (args, ctx) => {
       if (!["start", "stop", "get", "clear", "status", "block", "unblock"].includes(args.action)) {
@@ -973,6 +1008,222 @@ const tools = [
     },
   },
   {
+    name: "inspect_code",
+    title: "Inspect running code",
+    description:
+      "Look inside code that is running in the game, for reverse engineering. Actions: upvalues and constants (path of a script; for a ModuleScript also function_name to look at one function of the module), gc (search the garbage collector for functions by name_contains or has_constant, or for tables by has_key; at least one filter is required) and connections (path of an instance and the name of one of its signals: lists the handlers that are connected, with the function name, line, source and owning script). Needs the matching executor functions (getscriptclosure, getupvalues, getconstants, getgc, getconnections) and says which one is missing. Only reads. Requires the connected state.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["upvalues", "constants", "gc", "connections"], description: "What to inspect." },
+        path: { type: "string", description: "upvalues, constants: dotted path of the script. connections: dotted path of the instance." },
+        function_name: { type: "string", description: "upvalues, constants: a function of the ModuleScript's returned table, instead of the main chunk." },
+        signal: { type: "string", description: "connections: the event name, for example MouseButton1Click or Touched." },
+        kind: { type: "string", enum: ["function", "table"], description: "gc: what to search for (default function)." },
+        name_contains: { type: "string", description: "gc, functions: the function name contains this." },
+        has_constant: { type: "string", description: "gc, functions: the function uses this string constant." },
+        has_key: { type: "string", description: "gc, tables: the table has this string key." },
+        limit: { type: "integer", minimum: 1, maximum: 100, description: "Maximum entries to return (default 40 for upvalues and constants, 25 otherwise)." },
+        client: CLIENT_PROPERTY,
+      },
+      required: ["action"],
+      additionalProperties: false,
+    },
+    annotations: READ_ONLY,
+    needsRoblox: true,
+    run: (args, ctx) => {
+      if (!["upvalues", "constants", "gc", "connections"].includes(args.action)) {
+        throw new Error("'action' must be upvalues, constants, gc or connections.");
+      }
+      if (["upvalues", "constants", "connections"].includes(args.action)) requirePath(args);
+      return runSnippet(
+        "inspect_code",
+        {
+          action: args.action,
+          path: args.path,
+          function_name: args.function_name,
+          signal: args.signal,
+          kind: args.kind,
+          name_contains: args.name_contains,
+          has_constant: args.has_constant,
+          has_key: args.has_key,
+          limit: args.limit === undefined ? undefined : clampInt(args.limit, 1, 100, 25),
+        },
+        // Walking the whole heap can take a while in a big game.
+        { ...ctx, timeoutMs: 40000 },
+      );
+    },
+  },
+  {
+    name: "call_instance",
+    title: "Call a method, remote or signal",
+    description:
+      "Act on the running game directly. Actions: method (call a method of the instance at path, for example FindFirstChild or Destroy, with args), fire_remote (RemoteEvent:FireServer or RemoteFunction:InvokeServer with args, returns the answer of an InvokeServer) and fire_signal (firesignal on one of its events, for example MouseButton1Click). Roblox values in args are written as objects with __type: {\"__type\":\"Vector3\",\"x\":1,\"y\":2,\"z\":3}, Vector2, Color3 (r, g, b from 0 to 255), CFrame (x, y, z), Enum ({\"__type\":\"Enum\",\"value\":\"Enum.Material.Neon\"}) and Instance ({\"__type\":\"Instance\",\"path\":\"game.Workspace.Part\"}). This changes the running game and can have effects on the server, so only do it when the user asked for it. Requires the connected state.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["method", "fire_remote", "fire_signal"], description: "What to do." },
+        path: { type: "string", description: "Dotted path of the instance, starting at game." },
+        method: { type: "string", description: "method: the method name." },
+        signal: { type: "string", description: "fire_signal: the event name." },
+        args: { type: "array", items: {}, description: "Arguments, in order. Use __type objects for Roblox values (see the tool description). null is not supported." },
+        client: CLIENT_PROPERTY,
+      },
+      required: ["action", "path"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+    writes: true,
+    needsRoblox: true,
+    run: (args, ctx) => {
+      if (!["method", "fire_remote", "fire_signal"].includes(args.action)) {
+        throw new Error("'action' must be method, fire_remote or fire_signal.");
+      }
+      requirePath(args);
+      if (args.action === "method" && !(typeof args.method === "string" && args.method.length > 0)) {
+        throw new Error("'method' is required for the method action.");
+      }
+      if (args.action === "fire_signal" && !(typeof args.signal === "string" && args.signal.length > 0)) {
+        throw new Error("'signal' is required for the fire_signal action.");
+      }
+      if (args.args !== undefined && !Array.isArray(args.args)) {
+        throw new Error("'args' must be a list.");
+      }
+      if (Array.isArray(args.args) && args.args.some((value) => value === null)) {
+        throw new Error("null is not supported in args, because it would shift the other arguments.");
+      }
+      return runSnippet(
+        "call_instance",
+        { action: args.action, path: args.path, method: args.method, signal: args.signal, args: args.args },
+        // InvokeServer waits for the server.
+        { ...ctx, timeoutMs: 30000 },
+      );
+    },
+  },
+  {
+    name: "wait_for_instance",
+    title: "Wait for an instance",
+    description:
+      "Wait until the instance at a dotted path exists (and optionally is of a class), for example after a teleport or while a map loads. Returns found true with the path, or found false with the segment that is still missing after the timeout. Requires the connected state.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "Dotted path, starting at game." },
+        timeout: { type: "number", minimum: 0.5, maximum: 60, description: "Seconds to wait (default 10)." },
+        class_name: { type: "string", description: "The instance must be of this class (IsA)." },
+        client: CLIENT_PROPERTY,
+      },
+      required: ["path"],
+      additionalProperties: false,
+    },
+    annotations: READ_ONLY,
+    needsRoblox: true,
+    run: (args, ctx) => {
+      requirePath(args);
+      const timeout = Math.min(60, Math.max(0.5, Number.isFinite(Number(args.timeout)) ? Number(args.timeout) : 10));
+      return runSnippet(
+        "wait_for_instance",
+        { path: args.path, timeout, class_name: args.class_name },
+        { ...ctx, timeoutMs: Math.ceil(timeout + 10) * 1000 },
+      );
+    },
+  },
+  {
+    name: "http_spy",
+    title: "Spy on HTTP requests",
+    description:
+      "Record the HTTP requests that scripts send: the executor's request functions (request, http_request, syn.request, ...) and game:HttpGet, HttpPost and HttpService calls. Each entry has the method, address, headers, body, status and answer. It sees the requests of the game and of any other script in the executor, but not the traffic between Superbase and its bridge. Authorization, cookie and token values (also in addresses) and the Roblox account cookie are replaced with <redacted> before they are stored, and bodies are cut at max_body. Actions: start (optional max_calls, max_body, include_bodies, url_contains), get (optional since_id, url_contains, method, limit), stop, clear and status. Typical use: start, make the action happen, then get. Needs hookfunction or hookmetamethod in the executor and stays installed until the game is left. Requires the connected state.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["start", "stop", "get", "clear", "status"], description: "What to do." },
+        max_calls: { type: "integer", minimum: 20, maximum: 1000, description: "start: how many requests to keep (default 200)." },
+        max_body: { type: "integer", minimum: 0, maximum: 4000, description: "start: characters kept of each body (default 500)." },
+        include_bodies: { type: "boolean", description: "start: keep request and response bodies (default true)." },
+        url_contains: { type: "string", description: "start: only record addresses that contain this. get: only return those." },
+        since_id: { type: "integer", description: "get: only requests after this id (use the lastId of the previous result)." },
+        method: { type: "string", description: "get: only this HTTP method, for example POST." },
+        limit: { type: "integer", minimum: 1, maximum: 100, description: "get: maximum requests to return, newest kept (default 30)." },
+        client: CLIENT_PROPERTY,
+      },
+      required: ["action"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    needsRoblox: true,
+    run: (args, ctx) => {
+      if (!["start", "stop", "get", "clear", "status"].includes(args.action)) {
+        throw new Error("'action' must be start, stop, get, clear or status.");
+      }
+      return runSnippet(
+        "http_spy",
+        {
+          action: args.action,
+          max_calls: args.max_calls === undefined ? undefined : clampInt(args.max_calls, 20, 1000, 200),
+          max_body: args.max_body === undefined ? undefined : clampInt(args.max_body, 0, 4000, 500),
+          include_bodies: args.include_bodies,
+          url_contains: args.url_contains,
+          since_id: args.since_id,
+          method: args.method,
+          limit: args.limit === undefined ? undefined : clampInt(args.limit, 1, 100, 30),
+        },
+        ctx,
+      );
+    },
+  },
+  {
+    name: "notify",
+    title: "Show a toast in the game",
+    description:
+      "Show a small notification (toast) in the corner of the Roblox window, for example to tell the user that a long task is done while they are playing. Keep it short. Needs a Superbase client from version 1.4.0 and notifications switched on in the client settings. Requires the connected state.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        title: { type: "string", description: "Short title (at most 80 characters)." },
+        text: { type: "string", description: "Optional message (at most 300 characters)." },
+        kind: { type: "string", enum: ["info", "success", "warning", "error"], description: "Look of the toast (default info)." },
+        client: CLIENT_PROPERTY,
+      },
+      required: ["title"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    needsRoblox: true,
+    run: (args, ctx) => {
+      if (typeof args.title !== "string" || args.title.length === 0) {
+        throw new Error("'title' must be a non-empty string.");
+      }
+      return runSnippet("notify", { title: args.title, text: args.text, kind: args.kind }, ctx);
+    },
+  },
+  {
+    name: "run_file",
+    title: "Run a Lua file from disk",
+    description:
+      "Read a .lua, .luau or .txt file from this computer and run it in the connected Roblox executor, like execute_lua but without pasting the code. The path is on the computer that runs the Superbase MCP server (absolute, or relative to its working folder; ~ is the home folder). Files up to 500 KB. The code runs with the executor's full permissions, so only run files the user asked for. Requires the connected state.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "Path of the file on this computer." },
+        timeout_ms: { type: "integer", minimum: 1000, maximum: 120000, description: "How long to wait for the code to finish (default 15000)." },
+        client: CLIENT_PROPERTY,
+      },
+      required: ["path"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+    writes: true,
+    needsRoblox: true,
+    run: async (args, ctx) => {
+      const file = readLuaFile(requirePath(args));
+      const result = await execOnClient(file.source, {
+        client: ctx.client,
+        timeoutMs: args.timeout_ms === undefined ? undefined : clampInt(args.timeout_ms, 1000, 120000, 15000),
+      });
+      return { ...result, file: file.path, bytes: file.bytes };
+    },
+  },
+  {
     name: "gui_interact",
     title: "Operate the game's GUI",
     description:
@@ -995,6 +1246,7 @@ const tools = [
       additionalProperties: false,
     },
     annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+    writes: (args) => args.action !== "list",
     needsRoblox: true,
     run: (args, ctx) => {
       if (!["list", "click", "set_text", "trigger"].includes(args.action)) {
@@ -1062,6 +1314,7 @@ const tools = [
       additionalProperties: false,
     },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+    writes: true,
     needsRoblox: true,
     run: (args, ctx) => {
       requirePath(args);
@@ -1140,6 +1393,7 @@ const tools = [
       additionalProperties: false,
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    writes: true,
     needsRoblox: true,
     run: (args, ctx) => {
       if (args.action !== "teleport" && args.action !== "walk_to") throw new Error("'action' must be teleport or walk_to.");
@@ -1212,23 +1466,26 @@ const tools = [
     name: "recipes",
     title: "Recipes (saved Lua scripts)",
     description:
-      "Reusable Lua scripts kept as .lua files in the recipes folder of Superbase (the user can also run them from the dashboard). action list shows the recipes with their description and arguments; action run executes one in the game (name, and args for the recipe, available there as the table args); action save writes a new recipe (name, code, and a title, description and usage line for its header; overwrite true replaces an existing one). Recipe names are lowercase letters, digits, - and _. Recipes run with the executor's full permissions like execute_lua, so read a recipe's code before you run one you did not write. run needs the connected state, list and save do not.",
+      "Reusable Lua scripts kept as .lua files in the recipes folder of Superbase (the user can also run them from the dashboard). action list shows the recipes with their description and arguments; action run executes one in the game (name, and args for the recipe, available there as the table args); action save writes a new recipe (name, code, and a title, description and usage line for its header; overwrite true replaces an existing one). Recipe names are lowercase letters, digits, - and _. Recipes run with the executor's full permissions like execute_lua, so read a recipe's code before you run one you did not write. Sharing: preview_import downloads a recipe from a link (https only; GitHub files and gists, GitLab files; at most 100 KB) and shows its code and header without saving anything. Show that code to the user and say what it does. import saves it into the recipes folder, and only with confirm true after the user has agreed; it never runs the recipe. Imported code comes from the internet and is untrusted. run needs the connected state, the other actions do not.",
     inputSchema: {
       type: "object",
       properties: {
-        action: { type: "string", enum: ["list", "run", "save"], description: "list (default), run or save." },
-        name: { type: "string", description: "run, save: the recipe name, for example list-remotes." },
+        action: { type: "string", enum: ["list", "run", "save", "preview_import", "import"], description: "list (default), run, save, preview_import or import." },
+        name: { type: "string", description: "run, save, import: the recipe name, for example list-remotes. import: defaults to the name of the file in the link." },
+        url: { type: "string", description: "preview_import, import: https link to a .lua file on GitHub, a GitHub gist or GitLab." },
+        confirm: { type: "boolean", description: "import: must be true. Set it only after the user has seen the code from preview_import and agreed." },
         args: { type: "object", description: "run: arguments for the recipe, available in Lua as the table args.", additionalProperties: true },
         code: { type: "string", description: "save: the Lua code of the recipe. It can use args and should return a value." },
         title: { type: "string", description: "save: short title for the header." },
         description: { type: "string", description: "save: one line that says what the recipe does." },
         usage: { type: "string", description: "save: one line that describes the args it takes, for example 'contains (string, optional)'." },
-        overwrite: { type: "boolean", description: "save: replace a recipe that already exists (default false)." },
+        overwrite: { type: "boolean", description: "save, import: replace a recipe that already exists (default false)." },
         client: CLIENT_PROPERTY,
       },
       additionalProperties: false,
     },
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    writes: (args) => ["run", "save", "import"].includes(args.action),
     needsRoblox: (args) => args.action === "run",
     // Listing and saving only touch the recipes folder, so they work without the bridge.
     local: (args) => args.action !== "run",
@@ -1243,6 +1500,38 @@ const tools = [
           const recipeArgs = args.args && typeof args.args === "object" && !Array.isArray(args.args) ? args.args : {};
           return await runLua(recipe.source, recipeArgs, { ...ctx, timeoutMs: 30000 });
         }
+        if (action === "preview_import") {
+          const fetched = await recipeImport.fetchRecipe(String(args.url || ""));
+          const header = recipeStore.parseHeader(fetched.source);
+          // Inside value, so the code is shown as a block of Lua instead of an escaped string.
+          return {
+            ok: true,
+            value: {
+              url: fetched.url,
+              bytes: fetched.bytes,
+              suggestedName: fetched.suggestedName,
+              title: header.title,
+              description: header.description,
+              args: header.args,
+              note: "Nothing was saved. Show this code to the user. To keep it, call import with the same url and confirm true.",
+              source: fetched.source,
+            },
+          };
+        }
+        if (action === "import") {
+          if (args.confirm !== true) {
+            return { ok: false, value: null, error: "import needs confirm true, set only after the user has seen the code (preview_import) and agreed to save it." };
+          }
+          const fetched = await recipeImport.fetchRecipe(String(args.url || ""));
+          const name = args.name === undefined ? fetched.suggestedName : String(args.name);
+          const result = recipeStore.save(RECIPES_DIR, name, `-- Source: ${fetched.url}\n${fetched.source}`, {
+            title: args.title || name,
+            description: args.description || `Imported from ${fetched.url}`,
+            args: args.usage,
+            overwrite: args.overwrite === true,
+          });
+          return { ...result, url: fetched.url, bytes: fetched.bytes, note: "Saved, not run. Read the code before you run it." };
+        }
         if (action === "save") {
           return recipeStore.save(RECIPES_DIR, String(args.name || ""), args.code, {
             title: args.title,
@@ -1252,10 +1541,10 @@ const tools = [
           });
         }
       } catch (error) {
-        if (error instanceof recipeStore.RecipeError) return { ok: false, value: null, error: error.message };
+        if (error instanceof recipeStore.RecipeError || error instanceof recipeImport.ImportError) return { ok: false, value: null, error: error.message };
         throw error;
       }
-      throw new Error("'action' must be list, run or save.");
+      throw new Error("'action' must be list, run, save, preview_import or import.");
     },
   },
   {
@@ -1313,8 +1602,13 @@ function formatImage(header, data) {
 
 // One-time notes for the status line: the bridge was started automatically, a new release exists.
 let updateNoticeFor = null;
+let safeModeAnnounced = false;
 function pendingNotes(connection) {
   const notes = [];
+  if (SETTINGS.readOnly && !safeModeAnnounced) {
+    safeModeAnnounced = true;
+    notes.push("[Superbase] Safe mode is on: tools that change the game or run code are turned off.");
+  }
   if (autostart.notice) {
     notes.push(autostart.notice);
     autostart.notice = null;
@@ -1327,8 +1621,27 @@ function pendingNotes(connection) {
   return notes;
 }
 
+// Safe mode (the readOnly setting): tools that change the game, run code or write files are turned off. A tool that
+// can both read and write has a function in `writes` that looks at the arguments.
+function writesWith(tool, args) {
+  return typeof tool.writes === "function" ? tool.writes(args) === true : tool.writes === true;
+}
+
+function safeModeRefusal(tool) {
+  return {
+    content: [
+      {
+        type: "text",
+        text: `[Superbase] Safe mode is on, so ${tool.name} is turned off for this request. Safe mode lets the AI look at the game but not change it or run code. The user can turn it off with "readOnly": false in superbase.config.json (or SUPERBASE_READ_ONLY=0) and by restarting the AI client.`,
+      },
+    ],
+    isError: true,
+  };
+}
+
 // Every result starts with a status line, so the AI always knows if Roblox is connected.
 async function callTool(tool, args) {
+  if (SETTINGS.readOnly && writesWith(tool, args)) return safeModeRefusal(tool);
   if (typeof tool.local === "function" && tool.local(args)) {
     try {
       const data = await tool.run(args, {});
@@ -1377,16 +1690,21 @@ async function handleRequest(message) {
       const requested = message.params && message.params.protocolVersion;
       return {
         protocolVersion: SUPPORTED_VERSIONS.includes(requested) ? requested : SUPPORTED_VERSIONS[0],
-        capabilities: { tools: {} },
+        capabilities: { tools: {}, prompts: {} },
         serverInfo: SERVER_INFO,
-        instructions: INSTRUCTIONS,
+        instructions: SETTINGS.readOnly
+          ? `${INSTRUCTIONS}\n\nSafe mode is ON: tools that change the game or run code (execute_lua, set_property, character_control, call_instance, run_file, recipes run and save, gui_interact click, set_text and trigger, remote_spy block) are turned off. Work with the read-only tools, and tell the user to turn off "readOnly" in superbase.config.json if they need more.`
+          : INSTRUCTIONS,
       };
     }
     case "ping":
       return {};
     case "tools/list":
       return {
-        tools: tools.map(({ run, probe, needsRoblox, reportsConnection, local, ...definition }) => definition),
+        // In safe mode the tools that only write are not offered at all.
+        tools: tools
+          .filter((tool) => !(SETTINGS.readOnly && tool.writes === true))
+          .map(({ run, probe, needsRoblox, reportsConnection, local, writes, ...definition }) => definition),
       };
     case "tools/call": {
       const params = message.params || {};
@@ -1402,7 +1720,16 @@ async function handleRequest(message) {
     case "resources/templates/list":
       return { resourceTemplates: [] };
     case "prompts/list":
-      return { prompts: [] };
+      return { prompts: prompts.list() };
+    case "prompts/get": {
+      const params = message.params || {};
+      try {
+        return prompts.get(String(params.name || ""), params.arguments);
+      } catch (error) {
+        if (error instanceof prompts.PromptError) throw rpcError(-32602, error.message);
+        throw error;
+      }
+    }
     default:
       throw rpcError(-32601, `Method not found: ${message.method}`);
   }

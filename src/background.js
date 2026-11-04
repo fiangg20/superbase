@@ -96,7 +96,7 @@ async function startBridge({ settings, env = process.env, root = ROOT, bridgeFil
       detached: true,
       stdio: ["ignore", fd, fd],
       windowsHide: true,
-      env: { ...env, SUPERBASE_PLAIN: "1", SUPERBASE_PORT: String(settings.port) },
+      env: { ...env, SUPERBASE_PLAIN: "1", SUPERBASE_BACKGROUND: "1", SUPERBASE_PORT: String(settings.port) },
     });
     child.on("exit", (code) => {
       exited = code === null ? "stopped" : code;

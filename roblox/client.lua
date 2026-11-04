@@ -16,12 +16,13 @@ local CONFIG = {
     MaxResultLength = 60000,
     MaxDepth = 6,
     HistoryLines = 100,
-    Version = "1.3.2",
+    Version = "1.4.0",
 
     -- Teleports: the executor forgets this script when the game moves you to another place. With
     -- AutoReconnectOnTeleport the script asks the executor to load it again in the new place (queue_on_teleport),
     -- so the AI stays connected. The bridge fills in LoaderUrl when you load the script from it with loadstring.
     -- If you paste the file by hand, set LoaderUrl to the /client.lua address of your bridge yourself.
+    -- When the loader comes from your autoexec folder, nothing is queued: the executor runs the loader again in every place.
     AutoReconnectOnTeleport = true,
     LoaderUrl = "",
 
@@ -1470,25 +1471,31 @@ local function setUpTeleportResume()
     if not CONFIG.AutoReconnectOnTeleport then
         return
     end
-    local queue = findQueueOnTeleport()
-    if not queue then
-        warn("[Superbase] This executor has no queue_on_teleport, so the AI will disconnect when the game teleports you.")
-        return
-    end
-    if type(CONFIG.LoaderUrl) ~= "string" or CONFIG.LoaderUrl == "" then
-        warn("[Superbase] AutoReconnectOnTeleport needs LoaderUrl. Load the script with the loadstring line from the bridge, or set CONFIG.LoaderUrl.")
-        return
-    end
 
-    local code = string.format(
-        "getgenv().__SuperbaseResume = { token = %q }\nloadstring(game:HttpGet(%q))()",
-        CONFIG.Token,
-        CONFIG.LoaderUrl
-    )
-    local queued, queueError = pcall(queue, code)
-    if not queued then
-        warn("[Superbase] Could not queue the script for the next teleport: " .. tostring(queueError))
-        return
+    -- When the loader comes from the autoexec folder, the executor runs it again in every new place, so nothing has to
+    -- be queued. The loader says so with __SuperbaseAutoexec.
+    local autoexec = genv.__SuperbaseAutoexec == true
+    if not autoexec then
+        local queue = findQueueOnTeleport()
+        if not queue then
+            warn("[Superbase] This executor has no queue_on_teleport, so the AI will disconnect when the game teleports you.")
+            return
+        end
+        if type(CONFIG.LoaderUrl) ~= "string" or CONFIG.LoaderUrl == "" then
+            warn("[Superbase] AutoReconnectOnTeleport needs LoaderUrl. Load the script with the loadstring line from the bridge, or set CONFIG.LoaderUrl.")
+            return
+        end
+
+        local code = string.format(
+            "getgenv().__SuperbaseResume = { token = %q }\nloadstring(game:HttpGet(%q))()",
+            CONFIG.Token,
+            CONFIG.LoaderUrl
+        )
+        local queued, queueError = pcall(queue, code)
+        if not queued then
+            warn("[Superbase] Could not queue the script for the next teleport: " .. tostring(queueError))
+            return
+        end
     end
 
     local player = Players.LocalPlayer
@@ -1505,7 +1512,21 @@ end
 
 pcall(setUpTeleportResume)
 
-genv.__Superbase = { Stop = stop }
+genv.__Superbase = {
+    Stop = stop,
+    Version = CONFIG.Version,
+    Url = CONFIG.Url, -- lets the http spy skip the traffic between this client and the bridge
+    -- Used by the notify tool: shows a toast. kind is info, success, warning or error. Returns false when the
+    -- notifications are switched off in CONFIG.
+    Notify = function(title, text, kind)
+        if not CONFIG.Notifications then
+            return false
+        end
+        local level = (kind == "success" or kind == "warning" or kind == "error") and kind or "info"
+        notify(level, string.sub(tostring(title or "Superbase"), 1, 80), string.sub(tostring(text or ""), 1, 300), nil)
+        return true
+    end,
+}
 print("[Superbase] Started, connecting to " .. CONFIG.Url)
 
 -- BEGIN INTRO GATE

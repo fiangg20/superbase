@@ -1,6 +1,7 @@
 -- Superbase snippet: read the source of a script.
 -- The MCP server puts "local args = ..." in front of this file.
--- Arguments: args.path (dotted path to a Script, LocalScript or ModuleScript), args.max_chars.
+-- Arguments: args.path (dotted path to a Script, LocalScript or ModuleScript), args.max_chars, args.refresh
+-- (decompile again instead of using the cached source).
 
 local function resolvePath(path)
     local current = game
@@ -40,9 +41,25 @@ local function looksLikeDecompilerError(text)
         or string.find(head, "<!doctype html", 1, true) ~= nil
 end
 
-local decompileFailed = false
+-- Decompiling is slow, so the results are kept in the executor's global table. The keys are weak, so a script that
+-- is destroyed disappears from the cache. args.refresh = true decompiles again.
+local cacheOwner = (getgenv and getgenv()) or _G
+local sourceCache = cacheOwner.__SuperbaseSources
+if type(sourceCache) ~= "table" then
+    sourceCache = setmetatable({}, { __mode = "k" })
+    cacheOwner.__SuperbaseSources = sourceCache
+end
+local refreshCache = args.refresh == true
+local cacheHits = 0
 
-if type(decompile) == "function" then
+local decompileFailed = false
+local fromCache = false
+
+if not refreshCache and sourceCache[instance] then
+    source = sourceCache[instance]
+    method = "decompile"
+    fromCache = true
+elseif type(decompile) == "function" then
     local ok, result = pcall(decompile, instance)
     if ok and type(result) == "string" and #result > 0 then
         if looksLikeDecompilerError(result) then
@@ -50,6 +67,7 @@ if type(decompile) == "function" then
         else
             source = result
             method = "decompile"
+            sourceCache[instance] = result
         end
     end
 end
@@ -82,6 +100,7 @@ return {
     path = instance:GetFullName(),
     className = instance.ClassName,
     method = method,
+    fromCache = fromCache,
     length = length,
     truncated = truncated,
     source = source,

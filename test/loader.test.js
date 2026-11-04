@@ -19,6 +19,13 @@ const custom = render(9800, "10.0.0.4");
 assert.ok(custom.includes('local BRIDGE = "10.0.0.4:9800"') && !custom.includes("9731"));
 assert.strictEqual(custom.split("\n").length, template.split("\n").length, "only the address line changes");
 
+// The autoexec copy tells the client that the executor runs the loader again after a teleport.
+assert.ok(template.includes("local AUTOEXEC = false"), "the shared loader is not marked as autoexec");
+const marked = render(9731, "127.0.0.1", undefined, "", { autoexec: true });
+assert.ok(marked.includes("local AUTOEXEC = true") && !marked.includes("local AUTOEXEC = false"), "the autoexec copy is marked");
+assert.strictEqual(marked.split("\n").length, template.split("\n").length, "only the flag line changes");
+assert.ok(template.includes("__SuperbaseAutoexec"), "the loader sets the marker for the client");
+
 const broken = path.join(require("os").tmpdir(), `superbase-loader-test-${process.pid}.lua`);
 fs.writeFileSync(broken, "print(1)");
 assert.throws(() => render(1, "x", broken), /no BRIDGE line/);

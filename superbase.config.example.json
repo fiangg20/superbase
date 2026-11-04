@@ -11,6 +11,8 @@
   "staleMs": 30000,
   "screenshotMaxWidth": 1280,
   "screenshotFocus": true,
+  "readOnly": false,
+  "tray": true,
   "ollamaUrl": "http://127.0.0.1:11434",
   "embedModel": "embeddinggemma"
 }

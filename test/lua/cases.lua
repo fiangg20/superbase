@@ -473,21 +473,65 @@ r = run("recipes/list-sounds.lua", { playing_only = true })
 check("recipe list-sounds: playing only", r.total == 1 and r.sounds[1].path == "Workspace.Boom", r.total)
 
 -- dump_scripts ---------------------------------------------------------------
+H.genv.__SuperbaseSources = nil
 r = run("dump_scripts.lua", {}, { decompile = function(inst) return rawget(inst, "Source") end })
 check("dump: pages cover the scripts sorted by path", r.total == 3 and r.nextOffset == nil and #r.scripts == 3 and r.scripts[1].path < r.scripts[2].path and r.scripts[2].path < r.scripts[3].path, r.total)
 check("dump: source and class are included", r.scripts[1].source ~= nil and r.scripts[1].className ~= nil and r.placeId ~= nil)
+H.genv.__SuperbaseSources = nil
 r = run("dump_scripts.lua", { page_chars = 5000 }, { decompile = function() return string.rep("x", 4000) end })
 check("dump: a page stops at the character budget and names the next offset", #r.scripts == 2 and r.nextOffset == 2, #r.scripts)
+H.genv.__SuperbaseSources = nil
 local cut = run("dump_scripts.lua", { max_script_chars = 500 }, { decompile = function() return string.rep("x", 4000) end })
 check("dump: long scripts are cut and marked", #cut.scripts[1].source == 500 and cut.scripts[1].truncated == true)
+H.genv.__SuperbaseSources = nil
 local last = run("dump_scripts.lua", { offset = r.nextOffset }, { decompile = function() return "print(1)" end })
 check("dump: the next page continues where the last one stopped", #last.scripts == 1 and last.nextOffset == nil and last.offset == 2, #last.scripts)
+H.genv.__SuperbaseSources = nil
 r = run("dump_scripts.lua", { class_name = "ModuleScript" }, { decompile = function(inst) return rawget(inst, "Source") end })
 check("dump: class filter", r.total == 1 and r.scripts[1].className == "ModuleScript", r.total)
+H.genv.__SuperbaseSources = nil
 r = run("dump_scripts.lua", {}, { decompile = function() return "<!DOCTYPE html>error page" end })
 check("dump: a decompiler error page is replaced by the stored source", #r.scripts == 3 and not r.scripts[1].source:find("DOCTYPE", 1, true))
 r = run("dump_scripts.lua", { root = "game.Nope" }, {})
 check("dump: unknown root", r.error ~= nil)
+
+
+-- decompile cache -------------------------------------------------------------
+do
+    H.genv.__SuperbaseSources = nil
+    local decompiles = 0
+    local counting = { decompile = function(inst) decompiles = decompiles + 1 return rawget(inst, "Source") end }
+    local first = run("get_script_source.lua", { path = "game.ServerScriptService.Main" }, counting)
+    local second = run("get_script_source.lua", { path = "game.ServerScriptService.Main" }, counting)
+    check("cache: the first read decompiles, the second does not", decompiles == 1 and first.fromCache == false and second.fromCache == true and second.source == first.source, decompiles)
+    local refreshed = run("get_script_source.lua", { path = "game.ServerScriptService.Main", refresh = true }, counting)
+    check("cache: refresh decompiles again", decompiles == 2 and refreshed.fromCache == false, decompiles)
+
+    H.genv.__SuperbaseSources = nil
+    decompiles = 0
+    local searched = run("search_scripts.lua", { query = "coins" }, counting)
+    local firstCount = decompiles
+    local again = run("search_scripts.lua", { query = "coins" }, counting)
+    check("cache: a second search decompiles nothing", firstCount > 0 and decompiles == firstCount and again.fromCache == firstCount - (searched.unreadable or 0) and again.totalMatches == searched.totalMatches, again.fromCache)
+    run("search_scripts.lua", { query = "coins", refresh = true }, counting)
+    check("cache: search with refresh decompiles all again", decompiles == firstCount * 2, decompiles)
+
+    H.genv.__SuperbaseSources = nil
+    decompiles = 0
+    run("dump_scripts.lua", {}, counting)
+    local dumpCount = decompiles
+    local dumpAgain = run("dump_scripts.lua", {}, counting)
+    check("cache: dump_scripts shares the cache", decompiles == dumpCount and dumpAgain.fromCache == dumpCount, dumpAgain.fromCache)
+
+    -- Failures are not cached: a decompiler that fails once can succeed later.
+    H.genv.__SuperbaseSources = nil
+    local calls = 0
+    local flaky = { decompile = function(inst) calls = calls + 1 if calls == 1 then return "<!DOCTYPE html>down" end return "print('ok')" end }
+    local bad = run("get_script_source.lua", { path = "game.ServerScriptService.Client" }, flaky)
+    check("cache: an error page is not cached", bad.method ~= "decompile" or bad.source == nil or bad.source:find("DOCTYPE", 1, true) == nil)
+    local good = run("get_script_source.lua", { path = "game.ServerScriptService.Client" }, flaky)
+    H.genv.__SuperbaseSources = nil
+end
 
 -- roblox/loader.lua ---------------------------------------------------------------
 local ran, waits, warnings = {}, 0, {}
@@ -791,6 +835,270 @@ do
     check("client: Transport and PollWait are settings", source:find('Transport = "auto"', 1, true) ~= nil and source:find("PollWait = 10", 1, true) ~= nil)
     check("client: no early return for a missing WebSocket", source:find('does not expose WebSocket.connect', 1, true) == nil)
     check("client: the request functions are looked up", source:find("fluxus and fluxus.request", 1, true) ~= nil and source:find("syn and syn.request", 1, true) ~= nil)
+end
+
+-- inspect_code ----------------------------------------------------------------
+do
+    local fakeClosure = function() end
+    local fnNames = {}
+    local inspectEnv = {
+        getscriptclosure = function(inst) return fakeClosure end,
+        getupvalues = function(fn) return { [1] = 5, [2] = "text", [3] = H.nodes.buy, [4] = { a = 1 } } end,
+        getconstants = function(fn) return { [1] = "print", [2] = 42 } end,
+    }
+    r = run("inspect_code.lua", { action = "upvalues", path = "game.ServerScriptService.Main" }, inspectEnv)
+    check("inspect: upvalues listed with their types", r.total == 4 and r.values[1].value == "5" and r.values[2].value == '"text"' and r.values[3].type == "Instance" and r.values[3].value:find("ReplicatedStorage.Buy", 1, true) ~= nil, r.error)
+    r = run("inspect_code.lua", { action = "upvalues", path = "game.ServerScriptService.Main", limit = 2 }, inspectEnv)
+    check("inspect: the limit truncates", r.returned == 2 and r.truncated == true)
+    r = run("inspect_code.lua", { action = "constants", path = "game.ServerScriptService.Main" }, inspectEnv)
+    check("inspect: constants", r.total == 2 and r.values[1].value == '"print"' and r.values[2].value == "42", r.error)
+    r = run("inspect_code.lua", { action = "upvalues", path = "game.Workspace.Map" }, inspectEnv)
+    check("inspect: a non-script is refused", r.error ~= nil and r.error:find("not a script", 1, true) ~= nil, r.error)
+    r = run("inspect_code.lua", { action = "upvalues", path = "game.Nope" }, inspectEnv)
+    check("inspect: a missing path is named", r.error ~= nil and r.error:find("Nope", 1, true) ~= nil)
+    r = run("inspect_code.lua", { action = "upvalues", path = "game.ServerScriptService.Main" }, {})
+    check("inspect: no getscriptclosure is explained", r.error ~= nil and r.error:find("getscriptclosure", 1, true) ~= nil, r.error)
+    local moduleEnv = {
+        require = function(inst) return { addCoins = function() end, count = 3 } end,
+        getupvalues = inspectEnv.getupvalues,
+    }
+    r = run("inspect_code.lua", { action = "upvalues", path = "game.ReplicatedStorage.Utils", function_name = "addCoins" }, moduleEnv)
+    check("inspect: a function of a module", r.target == "ReplicatedStorage.Utils.addCoins" and r.total == 4, r.error)
+    r = run("inspect_code.lua", { action = "upvalues", path = "game.ReplicatedStorage.Utils", function_name = "count" }, moduleEnv)
+    check("inspect: a module member that is no function", r.error ~= nil and r.error:find("no function", 1, true) ~= nil, r.error)
+    r = run("inspect_code.lua", { action = "upvalues", path = "game.ServerScriptService.Main", function_name = "x" }, inspectEnv)
+    check("inspect: function_name needs a ModuleScript", r.error ~= nil and r.error:find("ModuleScript", 1, true) ~= nil, r.error)
+
+    -- gc
+    local buyFn, otherFn, ownFn = function() end, function() end, function() end
+    fnNames[buyFn], fnNames[otherFn], fnNames[ownFn] = "buyItem", "render", "buyHook"
+    local constantsOf = { [buyFn] = { "Buy", "Coins" }, [otherFn] = { "Draw" }, [ownFn] = { "Buy" } }
+    local heapTable = { coins = 10, gems = 2 }
+    local gcEnv = {
+        getgc = function() return { buyFn, otherFn, ownFn, heapTable, { other = 1 }, "text", 7 } end,
+        debug = { info = function(fn, what) return "=source", 12, fnNames[fn] end },
+        getconstants = function(fn) return constantsOf[fn] or {} end,
+        isexecutorclosure = function(fn) return fn == ownFn end,
+    }
+    r = run("inspect_code.lua", { action = "gc" }, gcEnv)
+    check("inspect gc: a filter is required", r.error ~= nil and r.error:find("filter", 1, true) ~= nil, r.error)
+    r = run("inspect_code.lua", { action = "gc", name_contains = "BUY" }, gcEnv)
+    check("inspect gc: name filter skips executor closures", r.matched == 1 and r.results[1].name == "buyItem" and r.results[1].line == 12, r.matched)
+    r = run("inspect_code.lua", { action = "gc", has_constant = "Coins" }, gcEnv)
+    check("inspect gc: constant filter", r.matched == 1 and r.results[1].name == "buyItem", r.matched)
+    r = run("inspect_code.lua", { action = "gc", name_contains = "buy", has_constant = "Draw" }, gcEnv)
+    check("inspect gc: filters combine", r.matched == 0)
+    r = run("inspect_code.lua", { action = "gc", kind = "table", has_key = "coins" }, gcEnv)
+    check("inspect gc: tables by key", r.matched == 1 and r.results[1].keys[1] ~= nil, r.error)
+    r = run("inspect_code.lua", { action = "gc", kind = "table", name_contains = "x" }, gcEnv)
+    check("inspect gc: tables need has_key", r.error ~= nil and r.error:find("has_key", 1, true) ~= nil, r.error)
+    r = run("inspect_code.lua", { action = "gc", name_contains = "a" }, {})
+    check("inspect gc: no getgc is explained", r.error ~= nil and r.error:find("getgc", 1, true) ~= nil, r.error)
+
+    -- connections
+    local handler = function() end
+    fnNames[handler] = "onClick"
+    rawset(H.nodes.play, "MouseButton1Click", { connections = { { Enabled = true, ForeignState = false, Function = handler }, { Enabled = false, ForeignState = false } } })
+    r = run("inspect_code.lua", { action = "connections", path = "game.Players.Bob.PlayerGui.Main.Menu.Play", signal = "MouseButton1Click" }, gcEnv)
+    check("inspect connections: handlers described", r.total == 2 and r.connections[1].enabled == true and r.connections[1]["function"].name == "onClick" and r.connections[2].enabled == false, r.error)
+    r = run("inspect_code.lua", { action = "connections", path = "game.Players.Bob.PlayerGui.Main.Menu.Play", signal = "Nope" }, gcEnv)
+    check("inspect connections: unknown signal", r.error ~= nil and r.error:find("no signal", 1, true) ~= nil, r.error)
+    r = run("inspect_code.lua", { action = "connections", path = "game.Players.Bob.PlayerGui.Main.Menu.Play" }, gcEnv)
+    check("inspect connections: signal required", r.error ~= nil)
+    r = run("inspect_code.lua", { action = "nope" }, gcEnv)
+    check("inspect: unknown action", r.error ~= nil and r.error:find("Unknown action", 1, true) ~= nil)
+end
+
+-- call_instance ----------------------------------------------------------------
+do
+    local got
+    local callEnv = {
+        Vector2 = { new = function(x, y) return { __typeName = "Vector2", X = x, Y = y } end },
+        Color3 = { fromRGB = function(r2, g, b) return { __typeName = "Color3", R = r2, G = g, B = b } end },
+        Enum = { Material = { Neon = "ENUM_NEON" } },
+        firesignal = function(signal, ...) got = { signal = signal, args = table.pack(...) } end,
+    }
+    r = run("call_instance.lua", { action = "method", path = "game.Workspace.Coins", method = "FindFirstChild", args = { "Coin3" } }, callEnv)
+    check("call: a method returns its results", r.resultCount == 1 and r.results[1] == "Instance<Part>(Workspace.Coins.Coin3)", r.error)
+    r = run("call_instance.lua", { action = "method", path = "game.Workspace.Coins", method = "Nope" }, callEnv)
+    check("call: an unknown method is named", r.error ~= nil and r.error:find("no method named Nope", 1, true) ~= nil, r.error)
+    r = run("call_instance.lua", { action = "method", path = "game.Workspace.Coins", method = "IsA", args = { "Folder" } }, callEnv)
+    check("call: booleans are rendered", r.results[1] == "true", r.error)
+    r = run("call_instance.lua", { action = "method", path = "game.Missing", method = "IsA" }, callEnv)
+    check("call: a missing path is named", r.error ~= nil and r.error:find("Missing", 1, true) ~= nil)
+
+    rawset(H.nodes.buy, "FireServer", function(self, ...) got = table.pack(...) end)
+    r = run("call_instance.lua", { action = "fire_remote", path = "game.ReplicatedStorage.Buy", args = {
+        "sword", 3,
+        { __type = "Vector3", x = 1, y = 2, z = 3 },
+        { __type = "Color3", r = 255, g = 0, b = 10 },
+        { __type = "Enum", value = "Enum.Material.Neon" },
+        { __type = "Instance", path = "game.Workspace.Map" },
+        { nested = { __type = "Vector2", x = 4, y = 5 } },
+    } }, callEnv)
+    check("call: FireServer is called with converted arguments", r.call == "FireServer" and got.n == 7 and got[1] == "sword" and got[3].__typeName == "Vector3" and got[3].Z == 3 and got[4].R == 255 and got[5] == "ENUM_NEON" and got[6] == H.nodes.map and got[7].nested.Y == 5, r.error)
+    rawset(H.nodes.getData, "InvokeServer", function(self, key) return "data:" .. key, 9 end)
+    r = run("call_instance.lua", { action = "fire_remote", path = "game.ReplicatedStorage.GetData", args = { "k" } }, callEnv)
+    check("call: InvokeServer returns the answer", r.call == "InvokeServer" and r.resultCount == 2 and r.results[1] == '"data:k"' and r.results[2] == "9", r.error)
+    r = run("call_instance.lua", { action = "fire_remote", path = "game.Workspace.Map" }, callEnv)
+    check("call: fire_remote refuses other classes", r.error ~= nil and r.error:find("not a RemoteEvent", 1, true) ~= nil, r.error)
+    r = run("call_instance.lua", { action = "fire_remote", path = "game.ReplicatedStorage.Buy", args = { { __type = "Teapot" } } }, callEnv)
+    check("call: an unknown value type is reported with its position", r.error ~= nil and r.error:find("Argument 1", 1, true) ~= nil and r.error:find("Teapot", 1, true) ~= nil, r.error)
+    r = run("call_instance.lua", { action = "fire_remote", path = "game.ReplicatedStorage.Buy", args = { { __type = "Enum", value = "Material.Neon" } } }, callEnv)
+    check("call: a malformed enum string is reported", r.error ~= nil and r.error:find("Enum.Material.Neon", 1, true) ~= nil, r.error)
+
+    rawset(H.nodes.play, "MouseButton1Click", { name = "signal" })
+    r = run("call_instance.lua", { action = "fire_signal", path = "game.Players.Bob.PlayerGui.Main.Menu.Play", signal = "MouseButton1Click", args = { 1 } }, callEnv)
+    check("call: firesignal gets the signal and arguments", r.fired == true and got.signal.name == "signal" and got.args[1] == 1, r.error)
+    r = run("call_instance.lua", { action = "fire_signal", path = "game.Players.Bob.PlayerGui.Main.Menu.Play", signal = "Nope" }, callEnv)
+    check("call: unknown signal", r.error ~= nil and r.error:find("no signal", 1, true) ~= nil, r.error)
+    callEnv.firesignal = nil
+    r = run("call_instance.lua", { action = "fire_signal", path = "game.Players.Bob.PlayerGui.Main.Menu.Play", signal = "MouseButton1Click" }, callEnv)
+    check("call: no firesignal is explained", r.error ~= nil and r.error:find("firesignal", 1, true) ~= nil, r.error)
+    r = run("call_instance.lua", { action = "nope", path = "game" }, callEnv)
+    check("call: unknown action", r.error ~= nil and r.error:find("Unknown action", 1, true) ~= nil)
+end
+
+-- wait_for_instance ------------------------------------------------------------
+do
+    local clock, created = 0, false
+    local waitEnv = {
+        os = { clock = function() return clock end, time = os.time },
+        task = { wait = function(seconds)
+            clock = clock + (seconds or 0.25)
+            if clock >= 1 and not created then
+                created = true
+                H.new("Part", "Late", {}, H.nodes.workspace)
+            end
+        end },
+    }
+    r = run("wait_for_instance.lua", { path = "game.Workspace.Map" }, waitEnv)
+    check("wait: an existing instance returns at once", r.found == true and r.waitedSeconds == 0 and r.className == "Model", r.error)
+    clock = 0
+    r = run("wait_for_instance.lua", { path = "game.Workspace.Late", timeout = 5 }, waitEnv)
+    check("wait: an instance that appears later is found", r.found == true and r.waitedSeconds >= 1 and r.waitedSeconds < 5, r.waitedSeconds)
+    clock = 0
+    r = run("wait_for_instance.lua", { path = "game.Workspace.Never.Deeper", timeout = 2 }, waitEnv)
+    check("wait: a timeout names the missing segment", r.found == false and r.stillMissing == "Never" and r.waitedSeconds >= 2, r.stillMissing)
+    clock = 0
+    r = run("wait_for_instance.lua", { path = "game.Workspace.Map", class_name = "Part", timeout = 1 }, waitEnv)
+    check("wait: the class must match", r.found == false and r.stillMissing:find("not a Part", 1, true) ~= nil, r.stillMissing)
+    r = run("wait_for_instance.lua", { path = "" }, waitEnv)
+    check("wait: empty path", r.error ~= nil)
+end
+
+-- notify ------------------------------------------------------------------------
+do
+    H.genv.__Superbase = nil
+    r = run("notify.lua", { title = "Hi" })
+    check("notify: an old client is explained", r.error ~= nil and r.error:find("too old", 1, true) ~= nil, r.error)
+    local shown
+    H.genv.__Superbase = { Notify = function(title, text, kind) shown = { title, text, kind }; return true end }
+    r = run("notify.lua", { title = "Done", text = "The farm is ready", kind = "success" })
+    check("notify: the client shows the toast", r.shown == true and shown[1] == "Done" and shown[2] == "The farm is ready" and shown[3] == "success", r.error)
+    H.genv.__Superbase = { Notify = function() return false end }
+    r = run("notify.lua", { title = "x" })
+    check("notify: switched off notifications are reported", r.shown == false and r.note ~= nil)
+    H.genv.__Superbase = { Notify = function() error("boom") end }
+    r = run("notify.lua", { title = "x" })
+    check("notify: a failing client is reported", r.error ~= nil and r.error:find("boom", 1, true) ~= nil, r.error)
+    H.genv.__Superbase = nil
+end
+
+-- http_spy ----------------------------------------------------------------------
+do
+    H.genv.__SuperbaseHttpSpy = nil
+    H.genv.__Superbase = nil
+    local replacements = {}
+    local fakeRequest = function() end
+    local httpEnv = {
+        request = fakeRequest,
+        http_request = fakeRequest,
+        hookfunction = function(fn, replacement)
+            replacements[#replacements + 1] = replacement
+            return function(options)
+                if options.Url:find("boom", 1, true) then error("network down", 0) end
+                return { StatusCode = 200, Headers = { ["Set-Cookie"] = "a=b", ["Content-Type"] = "text/plain" }, Body = "answer for " .. options.Url }
+            end
+        end,
+        newcclosure = function(fn) return fn end,
+    }
+    r = run("http_spy.lua", { action = "start", max_body = 30 }, httpEnv)
+    check("http spy: start hooks the request function once", r.active == true and #replacements == 1 and r.hooked[1] == "request", r.error)
+    local response = replacements[1]({ Url = "https://api.example.com/buy?item=1&token=abc&Key=zzz", Method = "post", Headers = { Authorization = "Bearer x", ["Content-Type"] = "application/json" }, Body = '{"a":1}' })
+    check("http spy: the real answer is passed through", response.StatusCode == 200 and response.Body:find("answer for", 1, true) == 1)
+    r = run("http_spy.lua", { action = "get" }, httpEnv)
+    local call = r.calls and r.calls[1]
+    check("http spy: the request is recorded", r.matched == 1 and call.method == "POST" and call.status == 200 and call.source == "request" and call.requestBody == '{"a":1}', r.error)
+    check("http spy: query tokens and keys are redacted", call.url == "https://api.example.com/buy?item=1&token=<redacted>&Key=<redacted>", call.url)
+    check("http spy: sensitive headers are redacted, others kept", call.requestHeaders.Authorization == "<redacted>" and call.requestHeaders["Content-Type"] == "application/json" and call.responseHeaders["Set-Cookie"] == "<redacted>", call.requestHeaders.Authorization)
+    check("http spy: long bodies are cut with their size", call.responseBody:find("characters)", 1, true) ~= nil and #call.responseBody < 80, call.responseBody)
+
+    replacements[1]({ Url = "https://x.test/cookie", Body = "c=_|WARNING:-DO-NOT-SHARE-THIS.--secret123&d=1" })
+    r = run("http_spy.lua", { action = "get", url_contains = "x.test" }, httpEnv)
+    check("http spy: the Roblox account cookie never gets stored", r.matched == 1 and r.calls[1].requestBody:find("secret123", 1, true) == nil and r.calls[1].requestBody:find("<redacted>", 1, true) ~= nil, r.calls and r.calls[1].requestBody)
+
+    -- Bridge traffic is skipped.
+    local before = run("http_spy.lua", { action = "status" }, httpEnv).lastId
+    H.genv.__Superbase = { Url = "ws://127.0.0.1:9731" }
+    replacements[1]({ Url = "http://127.0.0.1:9731/poll/next?session=1&wait=10" })
+    H.genv.__Superbase = nil
+    replacements[1]({ Url = "http://127.0.0.1:9731/poll/send?session=1" })
+    replacements[1]({ Url = "http://localhost:9731/client.lua?token=t" })
+    check("http spy: the client's own bridge traffic is not recorded", run("http_spy.lua", { action = "status" }, httpEnv).lastId == before)
+    replacements[1]({ Url = "http://127.0.0.1:3000/api" })
+    check("http spy: other local addresses are recorded", run("http_spy.lua", { action = "status" }, httpEnv).lastId == before + 1)
+
+    -- A failing request is recorded and still raises.
+    local ok = pcall(replacements[1], { Url = "https://boom.test/x" })
+    r = run("http_spy.lua", { action = "get", url_contains = "boom" }, httpEnv)
+    check("http spy: failures are recorded and re-raised", ok == false and r.matched == 1 and r.calls[1].error:find("network down", 1, true) ~= nil, r.calls and r.calls[1] and r.calls[1].error)
+
+    -- Filters.
+    r = run("http_spy.lua", { action = "get", method = "post" }, httpEnv)
+    check("http spy: method filter", r.matched == 1, r.matched)
+    r = run("http_spy.lua", { action = "get", limit = 1 }, httpEnv)
+    check("http spy: limit keeps the newest", r.returned == 1 and r.calls[1].url:find("boom", 1, true) ~= nil and r.matched > 1)
+    local lastId = r.lastId
+    r = run("http_spy.lua", { action = "get", since_id = lastId }, httpEnv)
+    check("http spy: since_id", r.matched == 0)
+
+    run("http_spy.lua", { action = "stop" }, httpEnv)
+    replacements[1]({ Url = "https://after-stop.test/" })
+    r = run("http_spy.lua", { action = "get", url_contains = "after-stop" }, httpEnv)
+    check("http spy: nothing is recorded after stop", r.matched == 0 and r.active == false)
+    r = run("http_spy.lua", { action = "clear" }, httpEnv)
+    check("http spy: clear", r.buffered == 0)
+    r = run("http_spy.lua", { action = "start" }, httpEnv)
+    check("http spy: start again does not hook twice", #replacements == 1 and r.active == true)
+
+    -- game:HttpGet and HttpService through __namecall.
+    H.genv.__SuperbaseHttpSpy = nil
+    local handler, method
+    local namecallEnv = {
+        hookmetamethod = function(target, name, fn) handler = fn; return function(self, ...) return "page", select("#", ...) end end,
+        getnamecallmethod = function() return method end,
+        setnamecallmethod = function(m) method = m end,
+        newcclosure = function(fn) return fn end,
+        getcallingscript = function() return H.nodes.play end,
+    }
+    r = run("http_spy.lua", { action = "start" }, namecallEnv)
+    check("http spy: namecall hook is enough when there is no request function", r.active == true and r.hooked[1]:find("namecalls", 1, true) ~= nil, r.error)
+    method = "HttpGet"
+    local body = handler(H.game, "https://pastebin.test/raw/abc?key=1")
+    method = "PostAsync"
+    handler(H.game, "https://hook.test/in", "payload", "application/json")
+    method = "GetService"
+    handler(H.game, "HttpService")
+    r = run("http_spy.lua", { action = "get" }, namecallEnv)
+    check("http spy: HttpGet is recorded with its answer and caller", body == "page" and r.matched == 2 and r.calls[1].method == "GET" and r.calls[1].responseBody == "page" and r.calls[1].source == "HttpGet" and r.calls[1].caller ~= nil, r.matched)
+    check("http spy: HttpGet query keys are redacted", r.calls[1].url == "https://pastebin.test/raw/abc?key=<redacted>", r.calls[1].url)
+    check("http spy: PostAsync is a POST with its body", r.calls[2].method == "POST" and r.calls[2].requestBody == "payload", r.calls[2].requestBody)
+
+    H.genv.__SuperbaseHttpSpy = nil
+    r = run("http_spy.lua", { action = "start" }, {})
+    check("http spy: an executor with no hooks is explained", r.error ~= nil and r.error:find("hooked", 1, true) ~= nil, r.error)
+    H.genv.__SuperbaseHttpSpy = nil
 end
 
 H.report()

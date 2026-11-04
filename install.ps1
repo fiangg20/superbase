@@ -101,7 +101,7 @@ try {
 
 Write-Host ''
 Say "Superbase is in $Dir"
-Say 'The bridge starts by itself in the background when your AI needs it (stop it with npm run stop, turn that off with autostart: false in superbase.config.json). To watch it in a terminal: npm start (in that folder).'
+Say 'The bridge starts by itself in the background when your AI needs it (stop it from the tray icon or with npm run stop, turn that off with autostart: false in superbase.config.json). To watch it in a terminal: npm start (in that folder).'
 if ($env:SUPERBASE_START -eq '1') {
   Say 'Starting the bridge...'
   Push-Location $Dir

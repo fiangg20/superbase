@@ -18,7 +18,7 @@ Superbase is a local [Model Context Protocol](https://modelcontextprotocol.io) (
 
 - **One command to set up.** `npm run setup` installs the one dependency and registers the MCP server in your AI clients. There is no separate `npm install` step, and you do not have to run `npm start`: the bridge starts by itself when the AI needs it. `npm start` is still there when you want to run the bridge yourself.
 - **Connection aware.** Every tool result starts with a status line. When the game is not connected, the AI gets the exact script you need to run and tells you.
-- **24 tools** for logs, errors, inspection, selectors, hierarchy trees, script listing, text search and search by meaning, remote spying and blocking, GUI interaction, screenshots, players and characters, performance stats, snapshots and diffs, saved Lua recipes, properties and code execution.
+- **30 tools** for logs, errors, inspection, selectors, hierarchy trees, script listing, text search and search by meaning, reverse engineering (upvalues, constants, the garbage collector, signal handlers, an HTTP spy), remote spying, blocking and firing, GUI interaction, screenshots, players and characters, performance stats, snapshots and diffs, saved and shared Lua recipes, properties and code execution. Plus six [prompts](#prompts) and a [safe mode](#safe-mode) that turns off everything that changes the game.
 - **Stays connected through teleports.** The client loads itself again in the new place, so the AI does not lose the game when you change servers.
 - **Works on more executors.** No WebSocket? The client falls back to HTTP long polling. `HttpGet` blocked? The loader uses the executor's `request` function. It can also install itself into your executor's autoexec folder.
 - **Several Roblox windows at once.** Every client gets an id, and every tool takes a `client` argument to pick one.
@@ -42,6 +42,7 @@ Superbase is a local [Model Context Protocol](https://modelcontextprotocol.io) (
 - [Several Roblox windows](#several-roblox-windows)
 - [Dashboard](#dashboard)
 - [Recipes](#recipes)
+- [Prompts](#prompts)
 - [Loader and autoexec](#loader-and-autoexec)
 - [Executors without WebSocket](#executors-without-websocket)
 - [Several computers](#several-computers)
@@ -50,10 +51,11 @@ Superbase is a local [Model Context Protocol](https://modelcontextprotocol.io) (
 - [The in-game client](#the-in-game-client)
 - [Executor functions](#executor-functions)
 - [Configuration](#configuration)
-- [Running the bridge in the background](#running-the-bridge-in-the-background)
+- [Running the bridge in the background](#running-the-bridge-in-the-background) (with the [tray icon](#tray-icon-windows))
 - [Updates](#updates)
 - [Token mode](#token-mode)
 - [HTTP API](#http-api)
+- [Safe mode](#safe-mode)
 - [Security](#security)
 - [Project layout](#project-layout)
 - [Fonts and icons](#fonts-and-icons)
@@ -118,7 +120,7 @@ Restart your AI client once so it loads the change.
 
 ```
   ╭────────────────────────────────────────────╮
-  │  Superbase Bridge 1.3.2                    │
+  │  Superbase Bridge 1.4.0                    │
   │  Roblox executor and AI, connected         │
   ╰────────────────────────────────────────────╯
 
@@ -398,6 +400,11 @@ Once connected, you can ask things like:
 - *"How is the performance right now? Is something dragging the frame rate?"*
 - *"Take a snapshot of Workspace.Map, I will open the shop, then tell me exactly what changed."*
 - *"List all remotes with `Buy` in the name, and save that as a recipe if it is useful."*
+- *"Which script handles the Buy button? List the functions connected to its click event."*
+- *"Start the HTTP spy, I will press the shop button, then tell me which server the game talks to and what it sends."*
+- *"Wait until the map has loaded, then tell me how many players are in the round."*
+- *"Run `C:\\Scripts\\farm.lua` and show a toast when it is done."*
+- *"Import the recipe from this GitHub link, show me the code first."*
 
 ## Tools reference
 
@@ -492,6 +499,9 @@ Reads the source of a `Script`, `LocalScript` or `ModuleScript`. It uses the exe
 | --- | --- | --- |
 | `path` | string | **Required.** Dotted path to the script. |
 | `max_chars` | integer | 100–40000. Default 20000. Longer sources are cut and marked `truncated`. |
+| `refresh` | boolean | Decompile again instead of using the cached source. Default `false`. |
+
+Decompiling is slow, so the executor keeps every decompiled source in memory (in `getgenv()`, weak keys, so a destroyed script disappears from it). `fromCache` in the result says whether the source came from there. `search_scripts` and the semantic index use the same cache, so a second search over the same scripts is fast. Failed or empty decompiles are never cached. The cache lives until you leave the game.
 
 ### `search_scripts` · needs game
 
@@ -509,8 +519,9 @@ Searches inside the source code of the scripts, like `grep`. It decompiles scrip
 | `max_matches` | integer | 1–200. Default 40. |
 | `max_scripts` | integer | 1–500 scripts to decompile. Default 150. |
 | `budget_seconds` | integer | 2–60. Default 20. |
+| `refresh` | boolean | Decompile the scripts again instead of using cached sources. Default `false`. |
 
-In `text` and `pattern` mode every matching line is returned with its script path and line number. In `words` mode every matching script is returned with its score and up to three sample lines. The result also has `searched`, `unreadable` (scripts that could not be decompiled), `timedOut` and `totalMatches`.
+In `text` and `pattern` mode every matching line is returned with its script path and line number. In `words` mode every matching script is returned with its score and up to three sample lines. The result also has `searched`, `unreadable` (scripts that could not be decompiled), `fromCache` (how many sources came from the [cache](#get_script_source--needs-game)), `timedOut` and `totalMatches`.
 
 ### `semantic_search`
 
@@ -716,18 +727,115 @@ Saves the state of part of the game and later shows what changed. It is the way 
 
 A diff lists `added`, `removed` and `changed` (path, property, before, after) with the total counts. Numbers are rounded to three decimals, so small physics jitter does not show up as a change. Instances are matched by their path from the root; instances that share a name get `#2`, `#3` and so on. Snapshots live in the memory of your executor and are gone when you leave the game.
 
+### `inspect_code` · needs game
+
+Looks inside code that is running, for reverse engineering. It only reads. Each action needs an executor function, and the tool says which one is missing.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `action` | string | **Required.** `upvalues`, `constants`, `gc` or `connections`. |
+| `path` | string | `upvalues`, `constants`: dotted path of a script. `connections`: dotted path of an instance. |
+| `function_name` | string | `upvalues`, `constants`: for a `ModuleScript`, look at this function of the table the module returns, instead of the main chunk. |
+| `signal` | string | `connections`: the event name, for example `MouseButton1Click` or `Touched`. |
+| `kind` | string | `gc`: `function` (default) or `table`. |
+| `name_contains` | string | `gc`, functions: the function name contains this. |
+| `has_constant` | string | `gc`, functions: the function uses this string constant. |
+| `has_key` | string | `gc`, tables: the table has this string key. |
+| `limit` | integer | 1–100 entries. Default 40 for `upvalues` and `constants`, 25 otherwise. |
+
+- `upvalues` and `constants` list each value with its index, type and a short rendering. A script's main chunk comes from `getscriptclosure`.
+- `gc` searches the whole heap with `getgc(true)`, so it needs at least one filter. Functions that belong to the executor (`isexecutorclosure`) are skipped. A match shows the function name, line, source and the script that owns it, or for a table the keys it has.
+- `connections` lists the handlers connected to a signal with `getconnections`: whether each is enabled, and the name, line and owning script of its function.
+
+### `call_instance` · needs game
+
+Acts on the running game directly: calls a method, fires a remote or fires a signal. It changes the game and can affect the server, so the AI only does it when you ask. It is turned off in [safe mode](#safe-mode).
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `action` | string | **Required.** `method`, `fire_remote` or `fire_signal`. |
+| `path` | string | **Required.** Dotted path of the instance. |
+| `method` | string | `method`: the method name, for example `FindFirstChild`. |
+| `signal` | string | `fire_signal`: the event name, fired with `firesignal`. |
+| `args` | array | Arguments, in order. `null` is not supported, because it would shift the other arguments. |
+
+`fire_remote` calls `FireServer` on a `RemoteEvent` and `InvokeServer` on a `RemoteFunction`, and returns what the server answered. Roblox values in `args` are objects with `__type`:
+
+```json
+{ "__type": "Vector3", "x": 1, "y": 2, "z": 3 }
+{ "__type": "Vector2", "x": 1, "y": 2 }
+{ "__type": "Color3", "r": 255, "g": 0, "b": 0 }
+{ "__type": "CFrame", "x": 0, "y": 5, "z": 0 }
+{ "__type": "Enum", "value": "Enum.Material.Neon" }
+{ "__type": "Instance", "path": "game.Workspace.Part" }
+```
+
+Other tables stay tables, and values inside them are converted too. Calls made this way are skipped by `remote_spy` unless it was started with `include_own`.
+
+### `wait_for_instance` · needs game
+
+Waits until the instance at a path exists, for example after a teleport or while a map loads. Returns `found: true` with the path and how long it waited, or `found: false` with the segment that is still missing.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `path` | string | **Required.** Dotted path, starting at `game`. |
+| `timeout` | number | 0.5–60 seconds. Default 10. |
+| `class_name` | string | The instance must also be of this class (`IsA`). |
+
+### `http_spy` · needs game
+
+Records the HTTP requests that scripts send: the executor's request functions (`request`, `http_request`, `syn.request`, `http.request`, `fluxus.request`) and `game:HttpGet`, `HttpPost` and `HttpService` calls. It sees requests from the game and from any other script in the executor, which makes it useful for finding out what a script phones home to. It does not record the traffic between Superbase and its own bridge.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `action` | string | **Required.** `start`, `get`, `stop`, `clear` or `status`. |
+| `max_calls` | integer | `start`: requests to keep, 20–1000. Default 200. |
+| `max_body` | integer | `start`: characters kept of each body, 0–4000. Default 500. |
+| `include_bodies` | boolean | `start`: keep request and response bodies. Default `true`. |
+| `url_contains` | string | `start`: only record addresses that contain this. `get`: only return those. |
+| `since_id` | integer | `get`: only requests after this id. Use `lastId` from the previous result. |
+| `method` | string | `get`: only this HTTP method, for example `POST`. |
+| `limit` | integer | `get`: 1–100, the newest are kept. Default 30. |
+
+Each entry has `source`, `method`, `url`, `requestHeaders`, `requestBody`, `status`, `responseHeaders`, `responseBody` and `seconds`, or `error` when the request failed.
+
+**Secrets are removed before anything is stored.** Header values and address parameters whose name contains `authorization`, `cookie`, `token`, `secret`, `password`, `key`, `signature` or `auth` become `<redacted>`, and the Roblox account cookie (`_|WARNING:-DO-NOT-SHARE-THIS...`) is removed from every text. Bodies can still contain other private data, so look at what the AI reads. Hooking needs `hookfunction` (request functions) or `hookmetamethod` (the `HttpGet` family) and stays installed until you leave the game.
+
+### `notify` · needs game
+
+Shows a small toast in the corner of the Roblox window, for example to tell you that a long task is done while you play. It needs a Superbase client from 1.4.0 and `Notifications = true` in the client settings (the result says if they are off).
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `title` | string | **Required.** At most 80 characters. |
+| `text` | string | At most 300 characters. |
+| `kind` | string | `info` (default), `success`, `warning` or `error`. |
+
+### `run_file` · needs game
+
+Reads a `.lua`, `.luau` or `.txt` file from the computer that runs the Superbase MCP server and runs it in the game, like `execute_lua` without pasting the code. It is turned off in [safe mode](#safe-mode).
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `path` | string | **Required.** Absolute, or relative to the folder the MCP server runs in. `~` is your home folder. |
+| `timeout_ms` | integer | 1000–120000. Default 15000. |
+
+Files up to 500 KB. The result is the same as for `execute_lua`, with `file` and `bytes` added. The code runs with your executor's full permissions.
+
 ### `recipes`
 
 Reusable Lua scripts, kept as `.lua` files in the `recipes` folder (see [Recipes](#recipes)). Only `run` needs the game, so the AI can list and save recipes while no game is connected.
 
 | Parameter | Type | Description |
 | --- | --- | --- |
-| `action` | `list`, `run` or `save` | Default `list`. |
-| `name` | string | `run`, `save`: lowercase letters, digits, `-` and `_`, at most 60 characters. |
+| `action` | string | `list` (default), `run`, `save`, `preview_import` or `import`. |
+| `name` | string | `run`, `save`, `import`: lowercase letters, digits, `-` and `_`, at most 60 characters. `import` defaults to the file name in the link. |
+| `url` | string | `preview_import`, `import`: https link to a `.lua` file, see [Sharing recipes](#sharing-recipes). |
+| `confirm` | boolean | `import`: must be `true`. The AI sets it only after you have seen the code and agreed. |
 | `args` | object | `run`: arguments for the recipe. They arrive in Lua as the table `args`. |
 | `code` | string | `save`: the Lua code, at most 100 KB. |
 | `title`, `description`, `usage` | string | `save`: the header lines of the recipe. |
-| `overwrite` | boolean | `save`: replace a recipe that already exists. |
+| `overwrite` | boolean | `save`, `import`: replace a recipe that already exists. |
 
 ### Limits
 
@@ -825,6 +933,37 @@ The code reads its settings from a table called `args` and returns a value. Supe
 
 Recipes run with your executor's full permissions, like `execute_lua`, so read a recipe you did not write before you run it. File names are checked: nothing outside the recipe folder can be read or written.
 
+### Sharing recipes
+
+A recipe is one small file, so sharing it is a link. Ask the AI to *"import the recipe from https://github.com/someone/recipes/blob/main/list-remotes.lua"*. It works in two steps:
+
+1. **`preview_import`** downloads the file and shows you its code and header. Nothing is saved.
+2. **`import`** saves it into your recipes folder, only after you have agreed (`confirm: true`). It adds a `-- Source: <link>` line and never runs the recipe. Running it is a separate step.
+
+Rules for the download, all enforced in the code:
+
+- https only, no port, no user name or password in the link.
+- Only these hosts: `raw.githubusercontent.com`, `gist.githubusercontent.com`, `github.com` (single file links, `.../blob/...`), `gist.github.com` and `gitlab.com` (single file links, `.../-/blob/...`). Page links are converted to the raw file. Another host is refused, also when a redirect leads there.
+- At most 100 KB, plain text only (a web page or a binary file is refused), a timeout of 15 seconds, at most 3 redirects.
+- No credentials or cookies are sent.
+
+To share your own recipe, put the `.lua` file in a GitHub repository or gist and give people the link. The code comes from the internet, so the AI shows it to you before it saves it, and you should read it before you run it. Importing is turned off in [safe mode](#safe-mode).
+
+## Prompts
+
+Superbase offers six [MCP prompts](https://modelcontextprotocol.io/docs/concepts/prompts): ready-made starting points that your AI client shows as a menu or as slash commands (in Claude Code they look like `/mcp__superbase__diagnose`). A prompt is only a text for the AI that says which tools to use and in what order. It changes nothing by itself.
+
+| Prompt | Argument | What it does |
+| --- | --- | --- |
+| `diagnose` | `focus` (optional) | Checks the connection, reads the errors and logs, finds the scripts behind them and reports what looks wrong. |
+| `find-code` | `what` (required) | Finds the scripts and lines that implement something, by meaning and by exact text. |
+| `explain-game` | | Maps the services, entry point scripts and remotes of the game. |
+| `trace-remote` | `remote` (optional) | Records the remote calls during an action and explains what they do. |
+| `performance-check` | | Measures FPS, stutters, memory and ping and looks for the cause. |
+| `why-error` | `error` (optional) | Explains a script error, from the latest one or from the text you give, and proposes a fix without applying it. |
+
+Prompts keep working in [safe mode](#safe-mode).
+
 ## Loader and autoexec
 
 There are two ways to start the client in your executor.
@@ -865,6 +1004,8 @@ npm run autoexec -- --dir "C:\path\to\your\executor\autoexec"
 | `--wait <seconds>` | How long to wait for an executor to connect (default 120). |
 | `--client <id>` | Which connected client to use when several are connected. |
 
+The loader that `npm run autoexec` writes is marked as an autoexec copy. The executor runs it again in every place, also after a teleport, so the client does not queue itself with `queue_on_teleport` in that case (see [Teleports](#the-in-game-client)). A loader you run by hand is not marked, and the client queues itself as usual.
+
 The search skips system folders and `node_modules`, and gives up after 30 seconds. In [token mode](#token-mode) the loader contains your token, so treat that file like the token itself. The search needs the bridge and the executor on the same computer, so with a bridge on another computer use `--dir`.
 
 ## Executors without WebSocket
@@ -878,6 +1019,8 @@ The client chooses by itself:
 - `Transport = "auto"` (default): WebSocket first. If it cannot connect but the bridge answers over HTTP, polling takes over and stays the choice.
 - `Transport = "websocket"`: never poll.
 - `Transport = "polling"`: always poll, even when WebSocket exists.
+
+**Mobile executors.** Executors on phones and tablets usually have `request` or `http_request` but no `WebSocket`, so the polling transport is made for them. It should work there, but it has not been tested on a mobile executor yet. The bridge has to be reachable from the device, which means the [network mode](#several-computers): run the bridge on a computer with a token, set `host`, and use the loader address with that computer's network address. If you try it, a report of what worked is welcome.
 
 Polling adds a little latency (a command waits for the next poll to be answered, which is usually immediate while a request is open). `PollWait` (default 10 seconds) is how long one request may wait. Lower it if your executor times out long requests.
 
@@ -978,7 +1121,7 @@ The bridge pings every client every 10 seconds and drops one after 30 seconds of
 
 Toasts wait for the intro to finish.
 
-**Teleports.** The executor forgets a script when the game teleports you. With `AutoReconnectOnTeleport` (on by default) the client asks the executor to run it again in the new place, using `queue_on_teleport`, and tells the bridge that the disconnect is a teleport. The new copy skips the intro, shows one "Reconnected after teleport" toast and the AI keeps working. This needs two things: an executor with `queue_on_teleport`, and a client that was loaded with the `loadstring` line from the bridge (the bridge puts its own address in `LoaderUrl`). If you paste the file by hand, set `LoaderUrl` yourself, for example `http://127.0.0.1:9731/client.lua`. In [token mode](#token-mode) the bridge serves `client.lua` only with `?token=`, and it puts that address (with the token) in `LoaderUrl` for you.
+**Teleports.** The executor forgets a script when the game teleports you. With `AutoReconnectOnTeleport` (on by default) the client asks the executor to run it again in the new place, using `queue_on_teleport`, and tells the bridge that the disconnect is a teleport. The new copy skips the intro, shows one "Reconnected after teleport" toast and the AI keeps working. **With the autoexec loader nothing is queued:** the executor runs the loader again in the new place by itself, so the client only tells the bridge about the teleport (the intro stays skipped through `Intro.Once`, and the new copy shows the normal "Connected" toast). If you use autoexec and also load the client by hand, both copies may start after a teleport, and the newest one stops the older one. Without autoexec, the queued reconnect needs two things: an executor with `queue_on_teleport`, and a client that was loaded with the `loadstring` line from the bridge (the bridge puts its own address in `LoaderUrl`). If you paste the file by hand, set `LoaderUrl` yourself, for example `http://127.0.0.1:9731/client.lua`. In [token mode](#token-mode) the bridge serves `client.lua` only with `?token=`, and it puts that address (with the token) in `LoaderUrl` for you.
 
 **Identity.** The client tells the bridge your player name and user id, so you can tell several windows apart.
 
@@ -995,7 +1138,7 @@ Edit the `CONFIG` table at the top of `roblox/client.lua`.
 | `Transport` | `"auto"` | `auto` (WebSocket, then HTTP polling), `websocket` or `polling`. See [Executors without WebSocket](#executors-without-websocket). |
 | `PollWait` | `10` | Seconds one polling request may wait for news (the bridge allows up to 20). |
 | `ReconnectDelay` | `3` | Seconds between reconnect attempts. |
-| `AutoReconnectOnTeleport` | `true` | Load the client again after a teleport (see above). |
+| `AutoReconnectOnTeleport` | `true` | Reconnect after a teleport: queue the client with `queue_on_teleport`, or nothing when the autoexec loader does it (see above). |
 | `LoaderUrl` | `""` | Where the client loads itself from after a teleport. The bridge fills it in when you use its loader. |
 | `Notifications` | `true` | Show status notifications. |
 | `NotifyActivity` | `true` | Also notify when the AI runs code or inspects something. |
@@ -1017,11 +1160,17 @@ The basics need only `loadstring` and either `WebSocket.connect` or an HTTP requ
 | Tool | Uses | Without it |
 | --- | --- | --- |
 | `get_script_source`, `search_scripts` | `decompile` | Falls back to the `Source` property, which is often not readable. |
+| `notify`, the intro, the toasts | nothing special | They use Roblox's own UI. |
 | `list_scripts`, `search_scripts` with `include_hidden` | `getnilinstances`, `getloadedmodules`, `getscripts` | Those sources are skipped and the result says which function is missing. |
+| `inspect_code` `upvalues`, `constants` | `getscriptclosure`, `getupvalues`, `getconstants` (`debug.getupvalues` and `debug.getconstants` also work) | Says which function is missing. For a `ModuleScript`, `function_name` needs only `require`. |
+| `inspect_code` `gc` | `getgc` (and optionally `isexecutorclosure`, `getconstants`) | Cannot search the heap. |
+| `inspect_code` `connections` | `getconnections` | Cannot list the handlers. |
+| `call_instance` `fire_signal` | `firesignal` | Cannot fire the signal. Methods and remotes need nothing extra. |
+| `http_spy` | `hookfunction` for the request functions, `hookmetamethod` and `getnamecallmethod` for `HttpGet` and `HttpService` (and optionally `newcclosure`, `getcallingscript`) | Records what it can hook, and cannot start when it can hook nothing. |
 | `remote_spy` (recording and blocking) | `hookmetamethod`, `getnamecallmethod` (and optionally `newcclosure`, `setnamecallmethod`, `checkcaller`, `getcallingscript`) | Cannot start. |
 | `gui_interact` `click` | `getconnections` or `firesignal`, or `VirtualInputManager` for `mode: "mouse"` | Cannot click. |
 | `gui_interact` `trigger` | `fireclickdetector`, `fireproximityprompt` | Cannot trigger that kind of object. |
-| Reconnect after a teleport | `queue_on_teleport` (or `queueonteleport`, `syn.queue_on_teleport`, `fluxus.queue_on_teleport`) | The AI disconnects when the game teleports you, and you run the loader again. |
+| Reconnect after a teleport (without the autoexec loader) | `queue_on_teleport` (or `queueonteleport`, `syn.queue_on_teleport`, `fluxus.queue_on_teleport`) | The AI disconnects when the game teleports you, and you run the loader again. |
 | `stats` | `Stats`, `RunService` (every executor has them) | Fields Roblox does not offer are left out of the result. |
 | `snapshot` | `getgenv` (falls back to `_G`) | Slots are kept in `_G`. |
 | HTTP polling, loader without `HttpGet` | `request`, `http_request`, `syn.request`, `http.request` or `fluxus.request` | Needs WebSocket, and `HttpGet` for the loader. |
@@ -1046,6 +1195,8 @@ Environment variables. Set them for the process that uses them: the bridge is st
 | `SUPERBASE_RECIPES` | bridge, MCP server | `recipes/` | Folder of the [recipes](#recipes). |
 | `SUPERBASE_SCREENSHOT_WIDTH` | MCP server | `1280` | Default `max_width` of the `screenshot` tool. |
 | `SUPERBASE_SCREENSHOT_FOCUS` | MCP server | `1` | Default `focus` of the `screenshot` tool. |
+| `SUPERBASE_READ_ONLY` | MCP server | none | Set to `1` for [safe mode](#safe-mode). |
+| `SUPERBASE_TRAY` | bridge | `1` | Set to `0` to turn off the [tray icon](#tray-icon-windows) of the background bridge. |
 | `SUPERBASE_OLLAMA_URL` | MCP server | `http://127.0.0.1:11434` | Ollama for [semantic search](#semantic-search). |
 | `SUPERBASE_EMBED_MODEL` | MCP server | `embeddinggemma` | Embedding model for semantic search. |
 | `SUPERBASE_CONFIG` | bridge, MCP server | `superbase.config.json` | Path of the settings file. `none` ignores the file. |
@@ -1081,6 +1232,8 @@ Instead of environment variables you can keep your settings in `superbase.config
 | `pingMs`, `staleMs` | `10000`, `30000` | Heartbeat interval and the silence after which a client is dropped. |
 | `screenshotMaxWidth` | `1280` | Default width of screenshots (320 to 1920). |
 | `screenshotFocus` | `true` | Default `focus` of screenshots. |
+| `tray` | `true` | Show the [tray icon](#tray-icon-windows) when the bridge runs in the background on Windows. |
+| `readOnly` | `false` | [Safe mode](#safe-mode): the MCP server hides and refuses everything that changes the game. |
 | `ollamaUrl` | `http://127.0.0.1:11434` | Ollama server for [semantic search](#semantic-search). |
 | `embedModel` | `embeddinggemma` | Embedding model for semantic search. |
 
@@ -1099,6 +1252,26 @@ You rarely need this, because the MCP server starts the bridge by itself (turn t
 | `npm run logs` | Shows the end of the log. `npm run logs -- -n 100` shows more, `npm run logs -- --follow` keeps following it. |
 
 If the bridge cannot be started, the AI gets the reason (for example the last lines of the log) in the status line.
+
+### Tray icon (Windows)
+
+On Windows the background bridge shows the Superbase icon in the notification area (near the clock, maybe under the `^` arrow), so you do not need the commands above. Right-click it:
+
+| Menu item | What it does |
+| --- | --- |
+| *Superbase 1.4.0* and the line under it | The version, and whether Roblox is connected (`Waiting for Roblox`, `Roblox: <player>` or `N windows connected`). It updates every few seconds, and the icon's tooltip shows the same. |
+| *Update available: x.y.z* | Only when a newer release exists. Opens the release page. |
+| *Open dashboard* | Opens the dashboard in your browser (double-clicking the icon does the same). |
+| *Copy loader line* | Puts the `loadstring(...)` line for your executor on the clipboard, with the token when there is one. |
+| *Show log* | Opens `.superbase/bridge.log` in Notepad. |
+| *Restart bridge* | The same as `npm run restart`. The new bridge brings its own icon. |
+| *Stop Superbase* | Stops the bridge. The icon disappears with it. |
+
+A small balloon says "Superbase is running" each time the background bridge starts, which is also how you notice that it runs. The icon is `assets/icon.png` scaled to 32 x 32 (the default application icon is used when the file is missing). The icon goes away by itself when the bridge ends, even when the bridge is killed from outside.
+
+How it works: the bridge starts `src/tray.ps1` in a hidden Windows PowerShell (`powershell.exe -NoProfile -NonInteractive -STA -ExecutionPolicy RemoteSigned -File ...`, no `Bypass` and no encoded command). The script talks to the bridge's `/status` over HTTP, and stops or restarts it by itself, so the bridge needs no extra code for the menu. The token is passed in the environment, not on the command line. It removes the "downloaded from the internet" mark of its own script first, because PowerShell refuses marked scripts under `RemoteSigned` (this happens to files extracted from a downloaded ZIP). If PowerShell fails anyway, the bridge writes one line with the reason to its log and keeps running without the icon.
+
+It only appears when the bridge runs in the background (started by the AI client or by `npm run start:bg`), never for `npm start` in a terminal, and not on macOS or Linux. Turn it off with `"tray": false` (or `SUPERBASE_TRAY=0`).
 
 ## Updates
 
@@ -1151,18 +1324,32 @@ Example:
 curl -H "x-superbase-client: curl" "http://127.0.0.1:9731/status?probe=1"
 ```
 
+## Safe mode
+
+Safe mode lets an AI look but not touch. Turn it on with `"readOnly": true` in `superbase.config.json` (or `SUPERBASE_READ_ONLY=1` in the `env` of your MCP config), then restart your AI client.
+
+| | In safe mode |
+| --- | --- |
+| Hidden from the tool list | `execute_lua`, `run_file`, `call_instance`, `set_property`, `character_control` |
+| Refused, with an explanation | `gui_interact` `click`, `set_text` and `trigger`, `remote_spy` `block` and `unblock`, `recipes` `run`, `save` and `import` |
+| Still available | Everything that reads: logs, errors, hierarchy, find, inspect, scripts and search (also `semantic_search`), `inspect_code`, `http_spy`, `remote_spy` recording, `screenshot`, `player_info`, `stats`, `snapshot`, `wait_for_instance`, `notify`, `gui_interact` `list`, `recipes` `list` and `preview_import`, the prompts |
+
+The AI is told that safe mode is on (so it does not try, and tells you which setting to change) and gets one note in its first status line. Safe mode limits the MCP server only. It does not change what the bridge's HTTP API or the dashboard can do, because those are yours: the dashboard's Run Lua tab still runs code. Recording tools (`remote_spy`, `http_spy`) stay on because they observe, but they can see private data, see [Security](#security).
+
 ## Security
 
 Superbase gives an AI the same power over your game client as your executor has. Read this section before you use it.
 
-- **Code execution.** `execute_lua`, `set_property`, `gui_interact`, `character_control` and `recipes` run code inside your executor. Review what the AI wants to run before you approve it, and only connect clients you trust.
+- **Code execution.** `execute_lua`, `run_file`, `call_instance`, `set_property`, `gui_interact`, `character_control` and `recipes` run code or act inside your executor. Review what the AI wants to run before you approve it, and only connect clients you trust. [Safe mode](#safe-mode) turns these off.
 - **Local by default.** The bridge binds to `127.0.0.1`. With the `host` setting it can listen on your network, and then it refuses to start without a token (16 characters or more), requires it on every request and every executor handshake, and still blocks web pages. Traffic is plain HTTP, so use it only on a network you trust or through a VPN. Never expose the port to the internet. See [Several computers](#several-computers).
 - **Web pages are blocked.** The bridge checks the `Host` header, rejects any HTTP request or WebSocket connection that carries a foreign `Origin`, never approves a CORS preflight and requires a custom header on every API call. A web page you visit cannot reach it. The dashboard is served with a strict Content Security Policy (styles, scripts and fonts only from the bridge itself, no inline code) and cannot be embedded in another page, and it shows log text as plain text only.
 - **Other programs are not blocked in open mode.** Without a token, any program running on your computer can use the bridge. Use [token mode](#token-mode) if that matters to you.
 - **Remote spy sees private data.** Remote calls can contain chat messages and other personal data of the game. The recorded calls stay in the memory of your executor, up to `max_calls`, and are sent to your AI client when it reads them.
 - **Screenshots capture pixels.** The `screenshot` tool copies the screen area of the Roblox window, so anything that covers the window is captured too. The image goes to your AI client.
+- **The HTTP spy sees private data.** `http_spy` records requests of the game and of other scripts. Authorization headers, cookies, tokens in addresses and the Roblox account cookie are removed before they are stored, but bodies can still hold personal data, and what is recorded goes to your AI client when it reads it.
+- **Imported recipes are untrusted code.** `recipes` `import` only downloads from a short list of code hosts, over https, up to 100 KB, and only after you agreed. It never runs what it saved.
 - **Recipes are code.** The `recipes` tool can save a Lua file in the recipe folder and run it later. Names are limited to lowercase letters, digits, `-` and `_`, so nothing is written outside that folder. Read recipes you did not write.
-- **The bridge can run in the background.** The MCP server starts it without a window and it keeps running until you stop it with `npm run stop`. It listens on `127.0.0.1` like always.
+- **The bridge can run in the background.** The MCP server starts it without a window and it keeps running until you stop it with `npm run stop` or, on Windows, with *Stop Superbase* in the tray icon (which also shows that it runs). It listens on `127.0.0.1` like always. The tray icon is a hidden PowerShell script that Superbase ships (`src/tray.ps1`, readable like all the code). It uses `-ExecutionPolicy RemoteSigned`, never `Bypass`, and you can turn it off with `"tray": false`.
 - **Keep tokens private.** Anyone who has the token and can reach the port can run code in your game. Never commit one. A loader written by `npm run autoexec` and a client loaded with `?token=` contain the token.
 - **Blocking remotes changes the game.** `remote_spy` with `block` stops the game's calls from reaching the server, which can break the game or get you kicked. The AI only does it when you ask.
 - **Semantic search stays local.** The script sources go to your own Ollama (`127.0.0.1` by default) and the index is a file in `.superbase/semantic/`. If you point `ollamaUrl` at another machine, the sources go there.
@@ -1186,6 +1373,10 @@ superbase/
 │   ├── config.js           Settings from environment variables, superbase.config.json and defaults
 │   ├── background.js       Start, stop and probe the bridge as a background process
 │   ├── recipes.js          The recipes folder: list, read, save, header parsing
+│   ├── recipe-import.js    Downloads a recipe from a code host (allowlist, limits, redirects)
+│   ├── prompts.js          The MCP prompts
+│   ├── tray.js             Starts the Windows tray icon for the background bridge
+│   ├── tray.ps1            The tray icon itself (PowerShell and Windows Forms)
 │   ├── loader.js           Renders the loader and the one line for an address and token
 │   ├── autoexec.js         Finds the autoexec folder with a probe file and writes the loader
 │   ├── poll-transport.js   HTTP long polling sessions for executors without WebSocket
@@ -1200,6 +1391,11 @@ superbase/
 │       ├── search_scripts.lua
 │       ├── dump_scripts.lua
 │       ├── remote_spy.lua
+│       ├── http_spy.lua
+│       ├── inspect_code.lua
+│       ├── call_instance.lua
+│       ├── wait_for_instance.lua
+│       ├── notify.lua
 │       ├── gui_interact.lua
 │       ├── player_info.lua
 │       ├── character_control.lua
@@ -1241,6 +1437,9 @@ superbase/
 │   ├── polling.test.js
 │   ├── network.test.js
 │   ├── semantic.test.js
+│   ├── prompts.test.js
+│   ├── recipe-import.test.js
+│   ├── tray.test.js
 │   └── lua/                Mock of the Roblox API for the snippet tests
 ├── superbase.config.example.json   Example settings file
 ├── install.ps1             One line installer for Windows
@@ -1263,7 +1462,7 @@ npm install
 npm test
 ```
 
-The tests start the bridge, the MCP server and fake executors. They cover every connection state, every tool, several clients at once, timeouts, the open and token modes and the protection against web pages. Separate tests cover HTTP polling, the network mode, the loader, the autoexec search (with a fake disk), semantic search (with a fake Ollama), the selector parser, the screenshot module (with a fake PowerShell), the settings, the background bridge and the `superbase` command (with a real start and stop), the recipes, the update check and update script (with a fake GitHub, git and npm) and static checks of the Lua files.
+The tests start the bridge, the MCP server and fake executors. They cover every connection state, every tool, safe mode, the prompts, several clients at once, timeouts, the open and token modes and the protection against web pages. Separate tests cover HTTP polling, the network mode, the loader, the autoexec search (with a fake disk), semantic search (with a fake Ollama), the selector parser, the screenshot module (with a fake PowerShell), the settings, the background bridge and the `superbase` command (with a real start and stop), the recipes and the recipe import (with a fake network), the tray icon (the PowerShell call and static checks of `tray.ps1`, which cannot run on Linux), the update check and update script (with a fake GitHub, git and npm) and static checks of the Lua files.
 
 The Lua snippets in `src/lua` also run against a small mock of the Roblox API (`test/lua`). That test needs a Lua 5.3 or newer interpreter (for example `lua5.4`) and is skipped when none is installed. The mock checks the logic of the snippets, not how a real executor behaves, so test changes to `roblox/client.lua` and `src/lua` in a game. The Windows screenshot capture also needs a manual test on Windows.
 
@@ -1288,11 +1487,14 @@ To add a tool that runs Lua in the game, put the code in `src/lua/<name>.lua` (i
 | Executor console shows `401 Unauthorized`, or a "Bridge closed the connection" notification | The bridge was started with a token. Load the client with `?token=<token>` or set `CONFIG.Token` in `client.lua` to the same value, or restart the bridge without a token. |
 | `Unable to connect`, or a "Bridge not found" notification | The bridge is not running, or the port differs from `CONFIG.Url`. |
 | The port is already in use | Pick another port: set `SUPERBASE_PORT` for the bridge and the MCP server, then use the loader the bridge prints. |
+| The tray icon does not appear | It only shows on Windows, for a bridge that runs in the background, and only with `"tray": true`. Look at the end of `.superbase/bridge.log` for a line that starts with `tray:` (for example PowerShell was blocked by a policy). Windows may also hide new icons under the `^` arrow of the taskbar. The bridge works without the icon. |
 | The AI says `bridge_offline` | The MCP server tries to start the bridge by itself, so the status line says why that failed (for example the port is used by another program, or the log has an error). Run `npm start` to see the message, or `npm run logs`. If you turned `autostart` off, start the bridge with `npm start` or `npm run start:bg`. |
-| The AI says `waiting_for_roblox` | The client stops when you leave or rejoin a game. Run the loader again, or put it in your executor's autoexec folder. After a teleport the client reconnects by itself within a few seconds. If it does not, check that your executor has `queue_on_teleport` and that you used the loader from the bridge (see [The in-game client](#the-in-game-client)). |
+| The AI says `waiting_for_roblox` | The client stops when you leave or rejoin a game. Run the loader again, or put it in your executor's autoexec folder. After a teleport the client reconnects by itself within a few seconds. If it does not, either use the autoexec loader (then the executor runs it again in every place), or check that your executor has `queue_on_teleport` and that you used the loader from the bridge (see [The in-game client](#the-in-game-client)). |
 | The AI says `unresponsive` | The game is frozen, still loading or closing. Wait, or rejoin and run the loader again. |
 | The AI says `unknown_client` | That client id is gone, for example after the window closed or the loader ran again. Use `list_clients`. |
 | The AI says `token_mismatch` | The MCP config token and the bridge token differ. Make them the same, or run the bridge without a token. |
+| `notify` says the client is too old | The running client is from before 1.4.0. Run the loader again. |
+| `inspect_code`, `http_spy` or `call_instance` says a function is missing | Your executor does not have that function, see [Executor functions](#executor-functions). |
 | `remote_spy` says the executor has no `hookmetamethod` | Your executor does not support hooking metamethods, so the remote spy cannot run. |
 | `gui_interact` cannot click a button | The button may have no connections to fire. Try `"mode": "mouse"`, which needs the button to be visible. |
 | `search_scripts` finds nothing or reports many `unreadable` scripts | The decompiler failed or timed out. Narrow it with `root` or `class_name`, raise `budget_seconds`, or try again later. |

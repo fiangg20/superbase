@@ -96,7 +96,8 @@ function save(dir, name, code, { title, description, args, overwrite = false } =
   }
 
   // Keep the code as it is, and put the header in front unless the code already starts with one.
-  const hasHeader = /^--\s*Recipe\s*:/i.test(code.trimStart());
+  // A "-- Source:" line in front (written by the import) does not count as a header.
+  const hasHeader = /^(--\s*Source\s*:[^\n]*\n)?--\s*Recipe\s*:/i.test(code.trimStart());
   const header = hasHeader
     ? ""
     : [`-- Recipe: ${oneLine(title) || name}`, `-- Description: ${oneLine(description)}`, `-- Args: ${oneLine(args)}`, ""].join("\n");

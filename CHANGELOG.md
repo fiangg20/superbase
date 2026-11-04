@@ -1,5 +1,40 @@
 # Changelog
 
+## 1.4.0
+
+Tools (24 tools became 30):
+
+- `inspect_code`: read upvalues and constants of a script or of a module function, search the garbage collector for functions (by name or constant) and tables (by key), and list the handlers connected to a signal. Read only.
+- `call_instance`: call a method, fire a `RemoteEvent` or `RemoteFunction` (with the answer of an `InvokeServer`), or fire a signal with `firesignal`. Roblox values are written as `{"__type": "Vector3", ...}` objects (Vector3, Vector2, Color3, CFrame, Enum, Instance).
+- `http_spy`: record the HTTP requests that scripts send (`request`, `http_request`, `syn.request`, `game:HttpGet`, `HttpService`). The Superbase client's own traffic is skipped. Authorization and cookie headers, tokens and keys in addresses and the Roblox account cookie are replaced with `<redacted>` before they are stored.
+- `wait_for_instance`: wait until a path exists (optionally of a class), for example after a teleport.
+- `notify`: show a toast in the Roblox window. The client now exposes `getgenv().__Superbase.Notify` for it.
+- `run_file`: run a `.lua`, `.luau` or `.txt` file (up to 500 KB) from the computer of the MCP server.
+
+Safe mode and sharing:
+
+- Safe mode (`"readOnly": true` or `SUPERBASE_READ_ONLY=1`): the MCP server hides `execute_lua`, `run_file`, `call_instance`, `set_property` and `character_control`, and refuses the writing actions of `gui_interact`, `remote_spy` (block) and `recipes` (run, save, import). The AI is told, and gets one note in its status line. The bridge's HTTP API and the dashboard are not limited.
+- Recipes can be shared by link: `preview_import` shows the code of a recipe from a link, `import` saves it (only with `confirm: true`, never runs it) with a `-- Source:` line. https only, an allowlist of hosts (`raw.githubusercontent.com`, `gist.githubusercontent.com`, `github.com`, `gist.github.com`, `gitlab.com`), 100 KB, 15 seconds, 3 redirects that must stay on allowed hosts, no credentials sent.
+- Six MCP prompts: `diagnose`, `find-code`, `explain-game`, `trace-remote`, `performance-check` and `why-error`.
+
+Speed:
+
+- Decompiled sources are cached in the executor (`getgenv().__SuperbaseSources`, weak keys). `get_script_source`, `search_scripts` and the dump behind `semantic_search` share it, and report `fromCache`. The new `refresh` parameter decompiles again. Failed decompiles are never cached.
+
+Background bridge:
+
+- Tray icon on Windows. The background bridge shows the Superbase icon (`assets/icon.png`) in the notification area, with a menu: status of the Roblox connection, open the dashboard, copy the loader line, show the log, restart the bridge and stop Superbase. It replaces `npm run stop`, `status` and `logs` for most people, and its start balloon tells you the bridge runs in the background. It is a hidden PowerShell script (`src/tray.ps1`, started with `-ExecutionPolicy RemoteSigned`, no `Bypass`, no encoded command) that closes by itself when the bridge ends. New setting `tray` (`SUPERBASE_TRAY`, default on). It never appears for `npm start` in a terminal.
+- The background bridge gets `SUPERBASE_BACKGROUND=1` from `superbase start` and from the MCP server's autostart.
+
+Teleports:
+
+- The loader that `npm run autoexec` writes is marked as an autoexec copy (`local AUTOEXEC = true`). The client then does not queue itself with `queue_on_teleport`, because the executor runs the autoexec loader again in every place. It still tells the bridge about the teleport. Loaders and one lines that you run by hand queue as before.
+
+Other:
+
+- New tests: the six snippets in the Lua mock (263 checks), the new tools, safe mode and prompts through the MCP server, the recipe import (fake network, redirects, limits), prompts, the tray (the PowerShell call, and static checks of `tray.ps1`, which cannot run on Linux).
+- Not tested on real machines yet: the tray icon on Windows, `http_spy` and `inspect_code` in real executors, the polling transport on a mobile executor.
+
 ## 1.3.2
 
 Setup and starting the client:

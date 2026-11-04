@@ -118,5 +118,7 @@ assert.ok(client.includes('type = "goodbye"') && /case "goodbye"/.test(bridge), 
 assert.ok(/shouldPlay\(CONFIG\.Intro, resume ~= nil\)/.test(client), "the intro gate is told about a teleport resume, which skips the intro");
 assert.ok(/Once = true/.test(client), "the intro plays only once by default");
 assert.ok(client.includes("__SuperbaseResume"), "the queued script marks itself as a resume");
+assert.ok(/genv\.__SuperbaseAutoexec == true/.test(client) && /if not autoexec then[\s\S]*findQueueOnTeleport\(\)/.test(client), "with autoexec the client does not queue itself");
+assert.ok(/send\(\{ type = "goodbye", reason = "teleport" \}\)/.test(client), "the goodbye on teleport stays, also with autoexec");
 
 console.log(`ALL LUA CHECKS PASSED (${files.length} files, ${used.size} snippets, version ${versions.package})`);

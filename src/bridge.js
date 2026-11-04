@@ -41,7 +41,7 @@ try {
   process.exit(1);
 }
 
-const VERSION = "1.3.2";
+const VERSION = "1.4.0";
 const settings = loadSettings(process.env);
 const HOST = unbracket(settings.host); // what the server binds to
 const EXPOSED = isExposedHost(HOST); // other computers can reach it
@@ -923,6 +923,15 @@ server.listen(PORT, HOST, () => {
     }
     console.log(`  ${ui.dim("Waiting for a Roblox client. Press Ctrl+C to stop.")}`);
     console.log("");
+  }
+
+  // Run in the background (started by the MCP server or by superbase start): show the tray icon on Windows.
+  if (process.env.SUPERBASE_BACKGROUND === "1") {
+    const tray = require("./tray").start(
+      { settings: { ...settings, port: PORT, host: HOST, token: TOKEN }, version: VERSION, logFile: background.locations(process.env, ROOT).log },
+      { log: (line) => console.log(`[superbase] ${line}`) },
+    );
+    if (tray.started) process.on("exit", () => tray.stop());
   }
 
   if (settings.updateCheck) {

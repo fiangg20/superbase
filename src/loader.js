@@ -18,15 +18,18 @@ function oneLiner(port, host = "127.0.0.1", token = "") {
   return `loadstring(game:HttpGet("http://${host}:${port}/client.lua${query(token)}"))()`;
 }
 
-// roblox/loader.lua with the address of the bridge filled in.
-function render(port, host = "127.0.0.1", file = LOADER_FILE, token = "") {
+// roblox/loader.lua with the address of the bridge filled in. With options.autoexec the loader tells the client that
+// the executor runs it again after every teleport (the client then skips queue_on_teleport).
+function render(port, host = "127.0.0.1", file = LOADER_FILE, token = "", options = {}) {
   const template = fs.readFileSync(file, "utf8");
   if (!/local BRIDGE = "[^"]*"/.test(template)) throw new Error("roblox/loader.lua has no BRIDGE line.");
   if (!/local TOKEN = "[^"]*"/.test(template)) throw new Error("roblox/loader.lua has no TOKEN line.");
+  if (!/local AUTOEXEC = (true|false)/.test(template)) throw new Error("roblox/loader.lua has no AUTOEXEC line.");
   // encodeURIComponent leaves only characters that are safe inside a Lua string.
   return template
     .replace(/local BRIDGE = "[^"]*"/, () => `local BRIDGE = "${host}:${port}"`)
-    .replace(/local TOKEN = "[^"]*"/, () => `local TOKEN = "${encodeURIComponent(token)}"`);
+    .replace(/local TOKEN = "[^"]*"/, () => `local TOKEN = "${encodeURIComponent(token)}"`)
+    .replace(/local AUTOEXEC = (true|false)/, () => `local AUTOEXEC = ${options.autoexec === true}`);
 }
 
 module.exports = { oneLiner, render, LOADER_FILE, AUTOEXEC_NAME };

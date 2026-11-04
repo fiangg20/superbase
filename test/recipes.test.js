@@ -40,6 +40,17 @@ recipes.save(dir, "own", "-- Recipe: Mine\n-- Description: Mine.\nreturn 1");
 assert.strictEqual(fs.readFileSync(path.join(dir, "own.lua"), "utf8"), "-- Recipe: Mine\n-- Description: Mine.\nreturn 1\n");
 assert.strictEqual(recipes.read(dir, "own").title, "Mine");
 
+// An imported recipe has a Source line in front. With its own header nothing is added, without one a header is put on top.
+recipes.save(dir, "shared", "-- Source: https://raw.githubusercontent.com/o/r/main/a.lua\n-- Recipe: Shared\n-- Description: From the web.\nreturn 1");
+const shared = fs.readFileSync(path.join(dir, "shared.lua"), "utf8");
+assert.strictEqual(shared.split("\n").filter((line) => /^-- Recipe:/.test(line)).length, 1, "no second header");
+assert.strictEqual(recipes.read(dir, "shared").title, "Shared");
+recipes.save(dir, "shared-bare", "-- Source: https://gist.githubusercontent.com/u/id/raw\nreturn 2", { title: "Bare", description: "Imported." });
+const bare = fs.readFileSync(path.join(dir, "shared-bare.lua"), "utf8");
+assert.ok(bare.startsWith("-- Recipe: Bare\n-- Description: Imported.\n"), bare);
+assert.ok(bare.includes("-- Source: https://gist.githubusercontent.com/u/id/raw\nreturn 2"), "the Source line stays with the code");
+assert.strictEqual(recipes.read(dir, "shared-bare").title, "Bare");
+
 // A header cannot be broken out of with a line break in the title.
 recipes.save(dir, "tricky", "return 1", { title: "A\nreturn os.exit()", description: "B\r\nC" });
 const tricky = fs.readFileSync(path.join(dir, "tricky.lua"), "utf8");
@@ -66,7 +77,7 @@ assert.ok(!fs.existsSync(path.join(dir, "..", "escape.lua")));
 // Other files in the folder are not recipes.
 fs.writeFileSync(path.join(dir, "notes.txt"), "x");
 fs.writeFileSync(path.join(dir, "Bad Name.lua"), "return 1");
-assert.deepStrictEqual(recipes.list(dir).map((entry) => entry.name), ["hello", "own", "plain", "tricky"]);
+assert.deepStrictEqual(recipes.list(dir).map((entry) => entry.name), ["hello", "own", "plain", "shared-bare", "shared", "tricky"]);
 
 // The header parser stops at the first line of code.
 assert.deepStrictEqual(recipes.parseHeader("-- Recipe: A\n-- Description: B\n-- Args: C\nreturn 1\n-- Recipe: later"), { title: "A", description: "B", args: "C" });
