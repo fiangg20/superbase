@@ -673,7 +673,7 @@ Waits until a **new** console line (or script error) that contains some text app
 
 ### `clear_logs`
 
-Clears the stored logs and errors. Optional: `client` clears only the entries of that client.
+Permanently deletes the console logs and script errors that the bridge has stored. They are kept in memory only, so a cleared entry cannot be recovered. The Roblox console, snapshots and recipes are not touched. Use it for a clean slate before you reproduce a problem, and read the old output first if you still need it. Optional: `client` (an id from `list_clients`) deletes only the entries of that client.
 
 ### `player_info` · needs game
 
