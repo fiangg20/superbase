@@ -1550,13 +1550,24 @@ const tools = [
   {
     name: "clear_logs",
     title: "Clear stored logs",
-    description: "Clear the logs and errors stored in the bridge, for all clients or only for one.",
+    description:
+      "Permanently delete the console logs and script errors that the bridge has stored, for all clients or only for one. " +
+      "The bridge keeps them in memory only, so a cleared entry cannot be recovered. Nothing else is touched: the Roblox " +
+      "console, snapshots, recipes and the game itself stay as they are. " +
+      "Use it to get a clean slate right before you reproduce a problem, so that get_logs, get_errors and wait_for_log only " +
+      "show new lines. Do not use it to hide old output you may still need: read it with get_logs or get_errors first. " +
+      "It does not need a running game, and clearing an empty store is harmless. Returns { cleared: true, client } where client is null when everything was cleared.",
     inputSchema: {
       type: "object",
-      properties: { client: { type: "string", description: "Only clear the entries of this client id (default: all)." } },
+      properties: {
+        client: {
+          type: "string",
+          description: "Only delete the entries of this client id, as listed by list_clients. Default: delete the entries of all clients.",
+        },
+      },
       additionalProperties: false,
     },
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     run: (args) => bridgeRequest("POST", "/clear", args.client ? { client: String(args.client) } : {}),
   },
 ];
