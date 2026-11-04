@@ -10,7 +10,7 @@
 
 <div align="center">
 
-[![Verified by M8ven](https://m8ven.ai/badge/mcp/fiangg20-superbase-1nmxtn)](https://m8ven.ai/verified?check=https%3A%2F%2Fgithub.com%2Ffiangg20%2Fsuperbase)
+[![Verified by M8ven](https://m8ven.ai/badge/mcp/fiangg20-superbase-1nmxtn)](https://m8ven.ai/verified?check=https%3A%2F%2Fgithub.com%2Ffiangg20%2Fsuperbase) [![Superbase MCP server – quality and maintenance score on Glama](https://glama.ai/mcp/servers/fiangg20/superbase/badges/score.svg)](https://glama.ai/mcp/servers/fiangg20/superbase)
 
 </div>
 
