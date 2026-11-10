@@ -10,7 +10,7 @@
 
 <div align="center">
 
-[![Verified by M8ven](https://m8ven.ai/badge/mcp/fiangg20-superbase-1nmxtn)](https://m8ven.ai/verified?check=https%3A%2F%2Fgithub.com%2Ffiangg20%2Fsuperbase) [![Superbase MCP server – quality and maintenance score on Glama](https://glama.ai/mcp/servers/fiangg20/superbase/badges/score.svg)](https://glama.ai/mcp/servers/fiangg20/superbase) [![Support on Saweria](https://img.shields.io/badge/Support%20on-Saweria-F7A823?style=for-the-badge)](https://saweria.co/bases)
+[![Verified by M8ven](https://m8ven.ai/badge/mcp/fiangg20-superbase-1nmxtn)](https://m8ven.ai/verified?check=https%3A%2F%2Fgithub.com%2Ffiangg20%2Fsuperbase) [![Superbase MCP server – quality and maintenance score on Glama](https://glama.ai/mcp/servers/fiangg20/superbase/badges/score.svg)](https://glama.ai/mcp/servers/fiangg20/superbase) [![Support on Saweria](https://img.shields.io/badge/Support%20on-Saweria-F7A823?style=for-the-badge)](https://saweria.co/bases) [![On MCP Radar](https://mcp.liqiwa.com/badge.svg)](https://mcp.liqiwa.com/s/fiangg20--superbase.html)
 
 </div>
 
