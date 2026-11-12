@@ -132,7 +132,7 @@ async function testOpenMode(BASE, stale, STALE_BASE) {
   const script = await res.text();
   assert.ok(script.includes(`Url = "ws://127.0.0.1:${PORT}"`), "the served script must use the bridge's own port");
   assert.ok(!script.includes("9731"), "the default port must be rewritten");
-  assert.ok(script.includes(`LoaderUrl = "http://127.0.0.1:${PORT}/client.lua"`), "the served script must know where to load itself from after a teleport");
+  assert.ok(!script.includes("LoaderUrl") && !script.includes("queue_on_teleport()"), "the served script does not queue itself for a teleport");
   assert.ok(script.includes("Superbase"));
 
   // 3b. Recipes: the list, one recipe with its source, and names that must not work.

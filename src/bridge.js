@@ -41,7 +41,7 @@ try {
   process.exit(1);
 }
 
-const VERSION = "1.4.0";
+const VERSION = "1.4.1";
 const settings = loadSettings(process.env);
 const HOST = unbracket(settings.host); // what the server binds to
 const EXPOSED = isExposedHost(HOST); // other computers can reach it
@@ -138,12 +138,7 @@ function readClientScript(hostHeader, token) {
   const file = findClientScript();
   if (!file) return null;
   const address = EXPOSED && typeof hostHeader === "string" && /^[A-Za-z0-9.:\-\[\]]+$/.test(hostHeader) ? hostHeader : `${SHOWN_HOST}:${PORT}`;
-  const loaderUrl = `http://${address}/client.lua${token ? `?token=${encodeURIComponent(token)}` : ""}`;
-  // The client also gets the address it was loaded from, so it can load itself again after a teleport.
-  let script = fs
-    .readFileSync(file, "utf8")
-    .replace(/Url = "ws:\/\/[^"]*"/, () => `Url = "ws://${address}"`)
-    .replace(/LoaderUrl = "[^"]*"/, () => `LoaderUrl = ${luaString(loaderUrl)}`);
+  let script = fs.readFileSync(file, "utf8").replace(/Url = "ws:\/\/[^"]*"/, () => `Url = "ws://${address}"`);
   if (token) script = script.replace(/Token = "[^"]*"/, () => `Token = ${luaString(token)}`);
   return script;
 }

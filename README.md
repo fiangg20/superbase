@@ -10,7 +10,7 @@
 
 <div align="center">
 
-[![Verified by M8ven](https://m8ven.ai/badge/mcp/fiangg20-superbase-1nmxtn)](https://m8ven.ai/verified?check=https%3A%2F%2Fgithub.com%2Ffiangg20%2Fsuperbase) [![Superbase MCP server – quality and maintenance score on Glama](https://glama.ai/mcp/servers/fiangg20/superbase/badges/score.svg)](https://glama.ai/mcp/servers/fiangg20/superbase) [![On MCP Radar](https://mcp.liqiwa.com/badge.svg)](https://mcp.liqiwa.com/s/fiangg20--superbase.html) [![Listed on mcpservers.org](https://mcpservers.org/badge.svg)](https://mcpservers.org/servers/fiangg20/superbase) [![Support on Saweria](https://img.shields.io/badge/Support%20on-Saweria-F7A823?style=for-the-badge)](https://saweria.co/bases)
+[![Verified by M8ven](https://m8ven.ai/badge/mcp/fiangg20-superbase-1nmxtn)](https://m8ven.ai/verified?check=https%3A%2F%2Fgithub.com%2Ffiangg20%2Fsuperbase) [![Superbase MCP server – quality and maintenance score on Glama](https://glama.ai/mcp/servers/fiangg20/superbase/badges/score.svg)](https://glama.ai/mcp/servers/fiangg20/superbase) [![On MCP Radar](https://mcp.liqiwa.com/badge.svg)](https://mcp.liqiwa.com/s/fiangg20--superbase.html) [![Support on Saweria](https://img.shields.io/badge/Support%20on-Saweria-F7A823?style=for-the-badge)](https://saweria.co/bases)
 
 </div>
 
@@ -19,7 +19,7 @@ Superbase is a local [Model Context Protocol](https://modelcontextprotocol.io) (
 - **One command to set up.** `npm run setup` installs the one dependency and registers the MCP server in your AI clients. There is no separate `npm install` step, and you do not have to run `npm start`: the bridge starts by itself when the AI needs it. `npm start` is still there when you want to run the bridge yourself.
 - **Connection aware.** Every tool result starts with a status line. When the game is not connected, the AI gets the exact script you need to run and tells you.
 - **30 tools** for logs, errors, inspection, selectors, hierarchy trees, script listing, text search and search by meaning, reverse engineering (upvalues, constants, the garbage collector, signal handlers, an HTTP spy), remote spying, blocking and firing, GUI interaction, screenshots, players and characters, performance stats, snapshots and diffs, saved and shared Lua recipes, properties and code execution. Plus six [prompts](#prompts) and a [safe mode](#safe-mode) that turns off everything that changes the game.
-- **Stays connected through teleports.** The client loads itself again in the new place, so the AI does not lose the game when you change servers.
+- **Teleports.** The executor forgets a script when the game teleports you, and Superbase does not use `queue_on_teleport`. With the loader in your executor's autoexec folder (`npm run autoexec`) the client comes back in every new place by itself. Without it, run the loader again after a teleport.
 - **Works on more executors.** No WebSocket? The client falls back to HTTP long polling. `HttpGet` blocked? The loader uses the executor's `request` function. It can also install itself into your executor's autoexec folder.
 - **Several Roblox windows at once.** Every client gets an id, and every tool takes a `client` argument to pick one.
 - **Web dashboard.** Live logs, errors, a Lua console, an instance explorer and screenshots at `http://127.0.0.1:9731/`.
@@ -120,7 +120,7 @@ Restart your AI client once so it loads the change.
 
 ```
   ╭────────────────────────────────────────────╮
-  │  Superbase Bridge 1.4.0                    │
+  │  Superbase Bridge 1.4.1                    │
   │  Roblox executor and AI, connected         │
   ╰────────────────────────────────────────────╯
 
@@ -925,10 +925,11 @@ local contains = type(args.contains) == "string" and string.lower(args.contains)
 return { total = total, remotes = found }
 ```
 
-The code reads its settings from a table called `args` and returns a value. Superbase ships with five recipes: `list-remotes`, `dump-leaderstats`, `list-gui-text`, `workspace-summary` and `list-sounds`.
+The code reads its settings from a table called `args` and returns a value. Superbase ships with eleven recipes, all read only: `list-remotes`, `dump-leaderstats`, `list-gui-text`, `workspace-summary`, `list-sounds`, `list-interactables` (ProximityPrompts and ClickDetectors), `list-values` (IntValue, StringValue and other value objects), `list-npcs` (humanoids that are not players, nearest first), `list-tools` (backpack, equipped, StarterPack and tools lying in the world), `playing-animations` (the animation tracks a character is playing) and `executor-functions` (what `getgenv()` holds: names and types, and the length of a string but never its text, because scripts often keep keys there).
 
 - **The AI** uses the `recipes` tool to list them, run one with `args`, or save a new one when you say a script is worth keeping.
 - **You** pick one in the Run Lua tab of the dashboard. The code goes into the editor, ready to change and run. Because the dashboard has no way to pass arguments, the editor starts with `local args = {}`: put your values in it.
+- **What belongs in recipes.** Recipes are small helpers for inspecting the game. When you ask the AI to make a script (a freecam, an ESP, an auto farm), it gives you the code in its reply and does not save it as a recipe. It saves a recipe only when you explicitly ask for one.
 - **Your own folder.** Set `recipesDir` in [`superbase.config.json`](#configuration-file) (or `SUPERBASE_RECIPES`) to keep your recipes somewhere else, for example in a folder that you back up.
 
 Recipes run with your executor's full permissions, like `execute_lua`, so read a recipe you did not write before you run it. File names are checked: nothing outside the recipe folder can be read or written.
@@ -1004,7 +1005,7 @@ npm run autoexec -- --dir "C:\path\to\your\executor\autoexec"
 | `--wait <seconds>` | How long to wait for an executor to connect (default 120). |
 | `--client <id>` | Which connected client to use when several are connected. |
 
-The loader that `npm run autoexec` writes is marked as an autoexec copy. The executor runs it again in every place, also after a teleport, so the client does not queue itself with `queue_on_teleport` in that case (see [Teleports](#the-in-game-client)). A loader you run by hand is not marked, and the client queues itself as usual.
+The loader that `npm run autoexec` writes is marked as an autoexec copy. The executor runs it again in every place, also after a teleport, which is how the client comes back (see [Teleports](#the-in-game-client)). Superbase does not use `queue_on_teleport`. The marker only changes the message that the client shows when you teleport.
 
 The search skips system folders and `node_modules`, and gives up after 30 seconds. In [token mode](#token-mode) the loader contains your token, so treat that file like the token itself. The search needs the bridge and the executor on the same computer, so with a bridge on another computer use `--dir`.
 
@@ -1092,7 +1093,7 @@ The AI always knows which state it is in, because the first line of every result
 | State | Status line | Meaning | What the AI does |
 | --- | --- | --- | --- |
 | `connected` | `●` | A client is connected and answered a ping. | Everything works. |
-| `waiting_for_roblox` | `○` | The bridge runs, but no game is connected. | Shows you the `loadstring` script and waits. Right after a teleport it waits a few seconds instead, because the client reconnects by itself. |
+| `waiting_for_roblox` | `○` | The bridge runs, but no game is connected. | Shows you the `loadstring` script and waits. Right after a teleport it waits a few seconds instead, because with the autoexec loader the client comes back by itself. |
 | `unresponsive` | `○` | A client is connected but did not answer a ping. | Tells you the game may be frozen, loading or closing. |
 | `unknown_client` | `○` | The `client` id that was asked for is not connected. | Calls `list_clients` and picks one. |
 | `bridge_offline` | `○` | The bridge is not running and could not be started. | The MCP server first starts the bridge by itself. Only when that fails (the status line says why) it asks you to run `npm start`. |
@@ -1113,7 +1114,7 @@ The bridge pings every client every 10 seconds and drops one after 30 seconds of
 | Notification | When |
 | --- | --- |
 | Connected / Reconnected | The bridge accepted the client. |
-| Teleporting / Reconnected after teleport | The game is moving you to another place, and the client came back there. |
+| Teleporting / Reconnected after teleport | The game is moving you to another place. With the autoexec loader the client comes back there. Without it, the toast asks you to run Superbase again in the new place. |
 | Disconnected | The connection was lost. The client keeps retrying. |
 | Bridge not found | The bridge is not running. Shown once, not on every retry. |
 | Bridge closed the connection | Usually a token problem. |
@@ -1121,7 +1122,7 @@ The bridge pings every client every 10 seconds and drops one after 30 seconds of
 
 Toasts wait for the intro to finish.
 
-**Teleports.** The executor forgets a script when the game teleports you. With `AutoReconnectOnTeleport` (on by default) the client asks the executor to run it again in the new place, using `queue_on_teleport`, and tells the bridge that the disconnect is a teleport. The new copy skips the intro, shows one "Reconnected after teleport" toast and the AI keeps working. **With the autoexec loader nothing is queued:** the executor runs the loader again in the new place by itself, so the client only tells the bridge about the teleport (the intro stays skipped through `Intro.Once`, and the new copy shows the normal "Connected" toast). If you use autoexec and also load the client by hand, both copies may start after a teleport, and the newest one stops the older one. Without autoexec, the queued reconnect needs two things: an executor with `queue_on_teleport`, and a client that was loaded with the `loadstring` line from the bridge (the bridge puts its own address in `LoaderUrl`). If you paste the file by hand, set `LoaderUrl` yourself, for example `http://127.0.0.1:9731/client.lua`. In [token mode](#token-mode) the bridge serves `client.lua` only with `?token=`, and it puts that address (with the token) in `LoaderUrl` for you.
+**Teleports.** The executor forgets a script when the game teleports you. Superbase does not use `queue_on_teleport`. When the client sees the teleport start, it tells the bridge that the disconnect is a teleport (so the AI knows why the client left) and shows a toast. What brings the client back is the **autoexec loader**: the executor runs it again in the new place by itself, so the AI keeps working and the new copy shows the normal "Connected" toast (the intro stays skipped through `Intro.Once`). If your executor keeps `getgenv()` through a teleport, the new copy also says "Reconnected after teleport". Without the autoexec loader the client does not come back: run the loader or the `loadstring` line again in the new place. If you use autoexec and also load the client by hand, both copies may start after a teleport, and the newest one stops the older one. Set the loader up with `npm run autoexec` (see [Loader and autoexec](#loader-and-autoexec)).
 
 **Identity.** The client tells the bridge your player name and user id, so you can tell several windows apart.
 
@@ -1138,8 +1139,6 @@ Edit the `CONFIG` table at the top of `roblox/client.lua`.
 | `Transport` | `"auto"` | `auto` (WebSocket, then HTTP polling), `websocket` or `polling`. See [Executors without WebSocket](#executors-without-websocket). |
 | `PollWait` | `10` | Seconds one polling request may wait for news (the bridge allows up to 20). |
 | `ReconnectDelay` | `3` | Seconds between reconnect attempts. |
-| `AutoReconnectOnTeleport` | `true` | Reconnect after a teleport: queue the client with `queue_on_teleport`, or nothing when the autoexec loader does it (see above). |
-| `LoaderUrl` | `""` | Where the client loads itself from after a teleport. The bridge fills it in when you use its loader. |
 | `Notifications` | `true` | Show status notifications. |
 | `NotifyActivity` | `true` | Also notify when the AI runs code or inspects something. |
 | `ActivityCooldown` | `3` | Minimum seconds between activity notifications. |
@@ -1170,7 +1169,6 @@ The basics need only `loadstring` and either `WebSocket.connect` or an HTTP requ
 | `remote_spy` (recording and blocking) | `hookmetamethod`, `getnamecallmethod` (and optionally `newcclosure`, `setnamecallmethod`, `checkcaller`, `getcallingscript`) | Cannot start. |
 | `gui_interact` `click` | `getconnections` or `firesignal`, or `VirtualInputManager` for `mode: "mouse"` | Cannot click. |
 | `gui_interact` `trigger` | `fireclickdetector`, `fireproximityprompt` | Cannot trigger that kind of object. |
-| Reconnect after a teleport (without the autoexec loader) | `queue_on_teleport` (or `queueonteleport`, `syn.queue_on_teleport`, `fluxus.queue_on_teleport`) | The AI disconnects when the game teleports you, and you run the loader again. |
 | `stats` | `Stats`, `RunService` (every executor has them) | Fields Roblox does not offer are left out of the result. |
 | `snapshot` | `getgenv` (falls back to `_G`) | Slots are kept in `_G`. |
 | HTTP polling, loader without `HttpGet` | `request`, `http_request`, `syn.request`, `http.request` or `fluxus.request` | Needs WebSocket, and `HttpGet` for the loader. |
@@ -1259,7 +1257,7 @@ On Windows the background bridge shows the Superbase icon in the notification ar
 
 | Menu item | What it does |
 | --- | --- |
-| *Superbase 1.4.0* and the line under it | The version, and whether Roblox is connected (`Waiting for Roblox`, `Roblox: <player>` or `N windows connected`). It updates every few seconds, and the icon's tooltip shows the same. |
+| *Superbase 1.4.1* and the line under it | The version, and whether Roblox is connected (`Waiting for Roblox`, `Roblox: <player>` or `N windows connected`). It updates every few seconds, and the icon's tooltip shows the same. |
 | *Update available: x.y.z* | Only when a newer release exists. Opens the release page. |
 | *Open dashboard* | Opens the dashboard in your browser (double-clicking the icon does the same). |
 | *Copy loader line* | Puts the `loadstring(...)` line for your executor on the clipboard, with the token when there is one. |
@@ -1489,7 +1487,7 @@ To add a tool that runs Lua in the game, put the code in `src/lua/<name>.lua` (i
 | The port is already in use | Pick another port: set `SUPERBASE_PORT` for the bridge and the MCP server, then use the loader the bridge prints. |
 | The tray icon does not appear | It only shows on Windows, for a bridge that runs in the background, and only with `"tray": true`. Look at the end of `.superbase/bridge.log` for a line that starts with `tray:` (for example PowerShell was blocked by a policy). Windows may also hide new icons under the `^` arrow of the taskbar. The bridge works without the icon. |
 | The AI says `bridge_offline` | The MCP server tries to start the bridge by itself, so the status line says why that failed (for example the port is used by another program, or the log has an error). Run `npm start` to see the message, or `npm run logs`. If you turned `autostart` off, start the bridge with `npm start` or `npm run start:bg`. |
-| The AI says `waiting_for_roblox` | The client stops when you leave or rejoin a game. Run the loader again, or put it in your executor's autoexec folder. After a teleport the client reconnects by itself within a few seconds. If it does not, either use the autoexec loader (then the executor runs it again in every place), or check that your executor has `queue_on_teleport` and that you used the loader from the bridge (see [The in-game client](#the-in-game-client)). |
+| The AI says `waiting_for_roblox` | The client stops when you leave or rejoin a game. Run the loader again, or put it in your executor's autoexec folder. After a teleport the client comes back by itself only with the autoexec loader (the executor runs it again in every place). Without it, run the loader again in the new place (see [The in-game client](#the-in-game-client)). |
 | The AI says `unresponsive` | The game is frozen, still loading or closing. Wait, or rejoin and run the loader again. |
 | The AI says `unknown_client` | That client id is gone, for example after the window closed or the loader ran again. Use `list_clients`. |
 | The AI says `token_mismatch` | The MCP config token and the bridge token differ. Make them the same, or run the bridge without a token. |

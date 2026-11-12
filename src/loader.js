@@ -19,7 +19,7 @@ function oneLiner(port, host = "127.0.0.1", token = "") {
 }
 
 // roblox/loader.lua with the address of the bridge filled in. With options.autoexec the loader tells the client that
-// the executor runs it again after every teleport (the client then skips queue_on_teleport).
+// the executor runs it again after every teleport, which is how the client comes back (the client only uses the marker for its message).
 function render(port, host = "127.0.0.1", file = LOADER_FILE, token = "", options = {}) {
   const template = fs.readFileSync(file, "utf8");
   if (!/local BRIDGE = "[^"]*"/.test(template)) throw new Error("roblox/loader.lua has no BRIDGE line.");

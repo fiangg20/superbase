@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.4.1
+
+Teleports (changed):
+
+- Superbase no longer uses `queue_on_teleport`, in any case. The client does not queue itself, and the code that looked for `queue_on_teleport`, `queueonteleport`, `syn.queue_on_teleport` and `fluxus.queue_on_teleport` is gone.
+- What brings the client back after a teleport is the autoexec loader (`npm run autoexec`): the executor runs it again in every place. Without it the client does not come back, and you run the loader again in the new place.
+- When the teleport starts, the client still tells the bridge that the disconnect is a teleport. The toast now says what to expect: "Superbase reconnects when the new place has loaded" with the autoexec loader, or "Run Superbase again in the new place, or use the autoexec loader" without it. The MCP server tells the AI the same.
+- Removed the client settings `AutoReconnectOnTeleport` and `LoaderUrl`. The bridge no longer puts a loader address into `client.lua`.
+- The client leaves a small marker in `getgenv()` right before a teleport (no token or other secret). If the executor keeps `getgenv()` through the teleport, the new copy skips the intro and says "Reconnected after teleport". Otherwise the intro follows `Intro.Once` as before.
+
+Recipes:
+
+- Six new recipes, all read only, so Superbase now ships with eleven:
+  - `list-interactables`: ProximityPrompts and ClickDetectors with their text, hold time, distance and key.
+  - `list-values`: IntValue, StringValue, BoolValue, ObjectValue and other value objects with their value, under a path of your choice.
+  - `list-npcs`: humanoids that are not player characters, with health, position and distance from you, nearest first.
+  - `list-tools`: Tool objects in your backpack, equipped, in the StarterPack and lying in the workspace.
+  - `playing-animations`: the animation tracks a character is playing, with id, priority, speed and progress.
+  - `executor-functions`: dumps what `getgenv()` holds, grouped into functions, tables (with their member names) and other values. The text of a string is never shown, only its length, because scripts often keep keys and tokens there. Superbase's own entries are left out.
+- The AI is told that recipes are small helpers for inspecting the game, not a place for scripts that you ask it to make. A freecam, an ESP or an auto farm goes to you in its reply, and a recipe is saved only when you explicitly ask for one. The note is in the instructions, in the description of the `recipes` tool and in the result of `recipes` with `list`.
+
+Other:
+
+- `clear_logs`: the description says that the deletion is permanent (the logs only live in the bridge's memory), what is not touched, and when to use it. The tool is now marked as destructive.
+- Tests: 296 Lua checks (the five new recipes and `executor-functions` run in the Lua mock), checks for the recipe note and for the removed `queue_on_teleport`.
+- Not tested on real machines yet: the new recipes in real executors (they run in the Lua mock only), the tray icon on Windows, `http_spy` and `inspect_code` in real executors, and the HTTP polling transport on a mobile executor.
+
 ## 1.4.0
 
 Tools (24 tools became 30):

@@ -15,7 +15,7 @@ local inherits = {
     PlayerGui = "Instance", Player = "Instance", Players = "Instance", DataModel = "Instance",
     Workspace = "Instance", GuiService = "Instance",
     Humanoid = "Instance", Tool = "Instance", Team = "Instance", Backpack = "Instance",
-    ValueBase = "Instance", IntValue = "ValueBase", StringValue = "ValueBase",
+    ValueBase = "Instance", IntValue = "ValueBase", StringValue = "ValueBase", BoolValue = "ValueBase", ObjectValue = "ValueBase",
     TextLabel = "GuiObject",
 }
 

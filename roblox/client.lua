@@ -16,15 +16,11 @@ local CONFIG = {
     MaxResultLength = 60000,
     MaxDepth = 6,
     HistoryLines = 100,
-    Version = "1.4.0",
+    Version = "1.4.1",
 
-    -- Teleports: the executor forgets this script when the game moves you to another place. With
-    -- AutoReconnectOnTeleport the script asks the executor to load it again in the new place (queue_on_teleport),
-    -- so the AI stays connected. The bridge fills in LoaderUrl when you load the script from it with loadstring.
-    -- If you paste the file by hand, set LoaderUrl to the /client.lua address of your bridge yourself.
-    -- When the loader comes from your autoexec folder, nothing is queued: the executor runs the loader again in every place.
-    AutoReconnectOnTeleport = true,
-    LoaderUrl = "",
+    -- Teleports: the executor forgets this script when the game moves you to another place. Superbase does not use
+    -- queue_on_teleport. Put the loader in your autoexec folder (npm run autoexec): the executor runs it again in every
+    -- place, and that brings the client back. Without it, run the loader again in the new place.
 
     -- Status notifications (small toasts in the top right corner).
     Notifications = true, -- connected, disconnected, bridge not found, rejected
@@ -80,12 +76,10 @@ for _, key in ipairs({ "__Superbase", "__DebugBridge" }) do
     end
 end
 
--- Set by the script that was queued before a teleport (see AutoReconnectOnTeleport).
+-- Set by the previous copy of this client right before a teleport (see setUpTeleportResume). When the executor keeps
+-- getgenv() through the teleport, the new copy skips the intro and says that it reconnected. Nothing secret is stored in it.
 local resume = type(genv.__SuperbaseResume) == "table" and genv.__SuperbaseResume or nil
 genv.__SuperbaseResume = nil
-if resume and CONFIG.Token == "" and type(resume.token) == "string" then
-    CONFIG.Token = resume.token
-end
 
 -- BEGIN POLLING TRANSPORT
 -- For executors without WebSocket. The bridge speaks the same messages over plain HTTP:
@@ -1460,54 +1454,30 @@ end
 
 -- Teleports ---------------------------------------------------------------------------------------------------
 
-local function findQueueOnTeleport()
-    return queue_on_teleport
-        or queueonteleport
-        or (syn and syn.queue_on_teleport)
-        or (fluxus and fluxus.queue_on_teleport)
-end
-
+-- Superbase never queues itself with queue_on_teleport. After a teleport the client comes back only when the executor
+-- runs the autoexec loader again (the loader marks itself with __SuperbaseAutoexec). This function tells the bridge that
+-- the disconnect is a teleport and tells the user what to expect.
 local function setUpTeleportResume()
-    if not CONFIG.AutoReconnectOnTeleport then
+    local player = Players.LocalPlayer
+    if not (player and player.OnTeleport) then
         return
     end
 
-    -- When the loader comes from the autoexec folder, the executor runs it again in every new place, so nothing has to
-    -- be queued. The loader says so with __SuperbaseAutoexec.
     local autoexec = genv.__SuperbaseAutoexec == true
-    if not autoexec then
-        local queue = findQueueOnTeleport()
-        if not queue then
-            warn("[Superbase] This executor has no queue_on_teleport, so the AI will disconnect when the game teleports you.")
-            return
-        end
-        if type(CONFIG.LoaderUrl) ~= "string" or CONFIG.LoaderUrl == "" then
-            warn("[Superbase] AutoReconnectOnTeleport needs LoaderUrl. Load the script with the loadstring line from the bridge, or set CONFIG.LoaderUrl.")
-            return
-        end
-
-        local code = string.format(
-            "getgenv().__SuperbaseResume = { token = %q }\nloadstring(game:HttpGet(%q))()",
-            CONFIG.Token,
-            CONFIG.LoaderUrl
-        )
-        local queued, queueError = pcall(queue, code)
-        if not queued then
-            warn("[Superbase] Could not queue the script for the next teleport: " .. tostring(queueError))
-            return
-        end
-    end
-
-    local player = Players.LocalPlayer
-    if player and player.OnTeleport then
-        table.insert(connections, player.OnTeleport:Connect(function(state)
-            if state == Enum.TeleportState.Started then
-                -- Tell the bridge this is a teleport, so the AI knows the client is coming back.
-                send({ type = "goodbye", reason = "teleport" })
+    table.insert(connections, player.OnTeleport:Connect(function(state)
+        if state == Enum.TeleportState.Started then
+            genv.__SuperbaseResume = { teleport = true }
+            -- Tell the bridge this is a teleport, so the AI knows why the client left.
+            send({ type = "goodbye", reason = "teleport" })
+            if autoexec then
                 notify("info", "Teleporting", "Superbase reconnects when the new place has loaded.", "teleport", "arrow-rotate-right")
+            else
+                notify("warning", "Teleporting", "Run Superbase again in the new place, or use the autoexec loader.", "teleport", "arrow-rotate-right")
             end
-        end))
-    end
+        elseif state == Enum.TeleportState.Failed then
+            genv.__SuperbaseResume = nil
+        end
+    end))
 end
 
 pcall(setUpTeleportResume)

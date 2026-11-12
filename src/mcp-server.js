@@ -17,7 +17,7 @@ const semantic = require("./semantic");
 const recipeImport = require("./recipe-import");
 const prompts = require("./prompts");
 
-const VERSION = "1.4.0";
+const VERSION = "1.4.1";
 const SETTINGS = loadSettings(process.env);
 const PORT = SETTINGS.port;
 const TOKEN = SETTINGS.token;
@@ -45,7 +45,7 @@ const INSTRUCTIONS = [
   "- Every tool result begins with a [Superbase] status line that shows the current connection state.",
   "- States: connected (all tools work); waiting_for_roblox (the bridge runs but no game is connected); unresponsive (a client is connected but does not answer: the game may be frozen, loading or closing); unknown_client (the client id you passed is not connected); bridge_offline (the bridge is not running and could not be started automatically: the hint says why); token_mismatch (the bridge and this MCP config disagree about the token).",
   "- The bridge starts by itself when a tool needs it, so the user does not have to run npm start (it stays available for running the bridge by hand). A note in the status line says when that happened. When that note appears, tell the user in plain words that the bridge now runs in the background, that it keeps running until they stop it (on Windows: right-click the Superbase icon in the tray and choose Stop Superbase; anywhere: npm run stop), and that autostart can be turned off with \"autostart\": false in superbase.config.json. Do not skip this, they have not seen the note unless you say it.",
-  "- After a teleport the Roblox client reconnects by itself within a few seconds (when auto reconnect is on). If the state is waiting_for_roblox right after a teleport, call roblox_status again before asking the user to do anything.",
+  "- After a teleport the Roblox client comes back by itself only when the user has the Superbase loader in the executor's autoexec folder. If the state is waiting_for_roblox right after a teleport, call roblox_status again in a few seconds. If it stays disconnected for a minute or more, ask the user to run the loader again in the new place, or to use npm run autoexec.",
   "- When the state is waiting_for_roblox, the status line contains a one-line loadstring script. Show it to the user in a code block so they can run it in their executor, then wait for them.",
   "- When the state is not connected, do not retry in a loop. Tell the user what is missing and wait for them.",
   "",
@@ -61,7 +61,7 @@ const INSTRUCTIONS = [
   "- player_info lists the players with position, distance, health and items. character_control teleports the local character or walks it to a position, a player or an instance.",
   "- stats measures FPS (average, minimum, 1% low), stutters, memory, ping and world size, with short notes on what looks wrong. snapshot saves the state of part of the tree and later reports what was added, removed or changed, which is the way to see the effect of an action.",
   "- semantic_search finds code by meaning with a local Ollama: index the game once (repeat with offset until done is true), then search with a plain description. It needs Ollama running with the embedding model pulled, and says what is missing. Use search_scripts for exact text.",
-  "- recipes lists, runs and saves reusable Lua scripts (a folder of .lua files with a header). Check the list before you write a script for a common task, and save a script as a recipe when the user will want it again.",
+  "- recipes lists and runs small Lua helpers for inspecting the game (a folder of .lua files with a header). Check the list before you write a script for a common inspection task. Recipes are not the place for what the user asks you to build: when the user wants a script (a freecam, an ESP, an auto farm, anything), give the code to the user in your reply, or run it with execute_lua or run_file when they want it running now. Never save it as a recipe unless the user explicitly asks you to save a recipe.",
   "- Reverse engineering: inspect_code reads the upvalues and constants of a script or of a module function, searches the garbage collector for functions and tables, and lists the handlers connected to a signal. http_spy records the HTTP requests that scripts send (secrets are redacted): start it, let the action happen, read with get. get_script_source, search_scripts and dump results come from a cache in the executor, pass refresh to decompile again.",
   "- call_instance calls a method, fires a RemoteEvent or RemoteFunction, or fires a signal, with Roblox values written as __type objects. wait_for_instance waits until a path exists, for example after a teleport. run_file runs a .lua file from the user's computer in the game. notify shows a short toast in the Roblox window, for example when a long task is finished.",
   "- To check the effect of an action, use execute_lua with capture_logs, or wait_for_log to wait for a specific console line.",
@@ -114,7 +114,7 @@ function hintFor(state, status, autostartError) {
         : "The bridge requires a token. Set BRIDGE_TOKEN in the MCP config to the token the bridge was started with, or restart the bridge without a token.";
     case "waiting_for_roblox": {
       if (status && status.lastDisconnectReason === "teleport" && typeof status.lastDisconnectedSecAgo === "number" && status.lastDisconnectedSecAgo < 120) {
-        return "The game is teleporting. The Roblox client reconnects by itself when the new place has loaded, so call roblox_status again in a few seconds. Only ask the user to run the loader again if it stays disconnected for a minute or more.";
+        return "The game is teleporting. With the loader in the executor's autoexec folder the Roblox client reconnects by itself when the new place has loaded, so call roblox_status again in a few seconds. If it stays disconnected for a minute or more, ask the user to run the loader again in the new place, or to set up the autoexec loader with npm run autoexec.";
       }
       const loader = loaderFor(status);
       return loader
@@ -1466,7 +1466,7 @@ const tools = [
     name: "recipes",
     title: "Recipes (saved Lua scripts)",
     description:
-      "Reusable Lua scripts kept as .lua files in the recipes folder of Superbase (the user can also run them from the dashboard). action list shows the recipes with their description and arguments; action run executes one in the game (name, and args for the recipe, available there as the table args); action save writes a new recipe (name, code, and a title, description and usage line for its header; overwrite true replaces an existing one). Recipe names are lowercase letters, digits, - and _. Recipes run with the executor's full permissions like execute_lua, so read a recipe's code before you run one you did not write. Sharing: preview_import downloads a recipe from a link (https only; GitHub files and gists, GitLab files; at most 100 KB) and shows its code and header without saving anything. Show that code to the user and say what it does. import saves it into the recipes folder, and only with confirm true after the user has agreed; it never runs the recipe. Imported code comes from the internet and is untrusted. run needs the connected state, the other actions do not.",
+      "Reusable Lua scripts kept as .lua files in the recipes folder of Superbase (the user can also run them from the dashboard). action list shows the recipes with their description and arguments; action run executes one in the game (name, and args for the recipe, available there as the table args); action save writes a new recipe (name, code, and a title, description and usage line for its header; overwrite true replaces an existing one). Recipe names are lowercase letters, digits, - and _. Recipes are small helpers for inspecting the game, not storage for scripts that the user asks you to make: when the user wants a script (a freecam, an ESP, an auto farm, anything they want to keep or run), give the code to the user in your reply and do not save it here. Use save only when the user explicitly asks you to save a recipe. Recipes run with the executor's full permissions like execute_lua, so read a recipe's code before you run one you did not write. Sharing: preview_import downloads a recipe from a link (https only; GitHub files and gists, GitLab files; at most 100 KB) and shows its code and header without saving anything. Show that code to the user and say what it does. import saves it into the recipes folder, and only with confirm true after the user has agreed; it never runs the recipe. Imported code comes from the internet and is untrusted. run needs the connected state, the other actions do not.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1475,7 +1475,7 @@ const tools = [
         url: { type: "string", description: "preview_import, import: https link to a .lua file on GitHub, a GitHub gist or GitLab." },
         confirm: { type: "boolean", description: "import: must be true. Set it only after the user has seen the code from preview_import and agreed." },
         args: { type: "object", description: "run: arguments for the recipe, available in Lua as the table args.", additionalProperties: true },
-        code: { type: "string", description: "save: the Lua code of the recipe. It can use args and should return a value." },
+        code: { type: "string", description: "save: the Lua code of the recipe. It can use args and should return a value. Only when the user explicitly asked you to save a recipe, never for a script that the user asked you to make." },
         title: { type: "string", description: "save: short title for the header." },
         description: { type: "string", description: "save: one line that says what the recipe does." },
         usage: { type: "string", description: "save: one line that describes the args it takes, for example 'contains (string, optional)'." },
@@ -1493,7 +1493,11 @@ const tools = [
       const action = args.action === undefined ? "list" : args.action;
       try {
         if (action === "list") {
-          return { dir: RECIPES_DIR, recipes: recipeStore.list(RECIPES_DIR) };
+          return {
+            dir: RECIPES_DIR,
+            note: "Recipes are helpers for inspecting the game. A script that the user asked you to make goes to the user in your reply, not into recipes. Save a recipe only when the user explicitly asks for it.",
+            recipes: recipeStore.list(RECIPES_DIR),
+          };
         }
         if (action === "run") {
           const recipe = recipeStore.read(RECIPES_DIR, String(args.name || ""));

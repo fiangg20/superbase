@@ -107,18 +107,22 @@ const versions = {
 };
 assert.strictEqual(new Set(Object.values(versions)).size, 1, `versions differ: ${JSON.stringify(versions)}`);
 
-// Auto reconnect on teleport: the setting, the loader address the bridge fills in, every executor spelling of
-// queue_on_teleport, the goodbye message the bridge understands and the skipped intro.
-assert.ok(/AutoReconnectOnTeleport = true/.test(client), "auto reconnect is on by default");
-assert.ok(/LoaderUrl = ""/.test(client), "LoaderUrl is empty in the file, the bridge fills it in");
-for (const spelling of ["queue_on_teleport", "queueonteleport", "syn.queue_on_teleport", "fluxus.queue_on_teleport"]) {
-  assert.ok(client.includes(spelling), `the client looks for ${spelling}`);
+// Teleports: Superbase never uses queue_on_teleport. The client only tells the bridge about the teleport (the goodbye
+// message), marks the next copy so that it can skip the intro, and warns the user when there is no autoexec loader.
+const loaderSource = fs.readFileSync(path.join(ROOT, "roblox", "loader.lua"), "utf8");
+for (const [name, source] of [["client.lua", client], ["loader.lua", loaderSource]]) {
+  const code = source.split("\n").filter((line) => !line.trim().startsWith("--")).join("\n");
+  for (const spelling of ["queue_on_teleport", "queueonteleport"]) {
+    assert.ok(!code.includes(spelling), `${name} never uses ${spelling} (comments may mention it)`);
+  }
 }
+assert.ok(!/AutoReconnectOnTeleport|LoaderUrl|findQueueOnTeleport/.test(client), "the old queue settings and helper are gone");
 assert.ok(client.includes('type = "goodbye"') && /case "goodbye"/.test(bridge), "the client says goodbye and the bridge understands it");
 assert.ok(/shouldPlay\(CONFIG\.Intro, resume ~= nil\)/.test(client), "the intro gate is told about a teleport resume, which skips the intro");
 assert.ok(/Once = true/.test(client), "the intro plays only once by default");
-assert.ok(client.includes("__SuperbaseResume"), "the queued script marks itself as a resume");
-assert.ok(/genv\.__SuperbaseAutoexec == true/.test(client) && /if not autoexec then[\s\S]*findQueueOnTeleport\(\)/.test(client), "with autoexec the client does not queue itself");
-assert.ok(/send\(\{ type = "goodbye", reason = "teleport" \}\)/.test(client), "the goodbye on teleport stays, also with autoexec");
+assert.ok(/genv\.__SuperbaseResume = \{ teleport = true \}/.test(client), "the client marks the next copy right before a teleport");
+assert.ok(!/__SuperbaseResume[^\n]*token/.test(client), "no token is stored in the resume marker");
+assert.ok(/genv\.__SuperbaseAutoexec == true/.test(client), "the autoexec marker only changes the message");
+assert.ok(/send\(\{ type = "goodbye", reason = "teleport" \}\)/.test(client), "the goodbye on teleport is always sent");
 
 console.log(`ALL LUA CHECKS PASSED (${files.length} files, ${used.size} snippets, version ${versions.package})`);

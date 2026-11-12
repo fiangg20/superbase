@@ -76,7 +76,7 @@ async function main() {
     assert.strictEqual(res.status, 200);
     assert.ok(res.text.includes(`Url = "ws://pc.lan:${PORT}"`), "the client connects to the address it was loaded from");
     assert.ok(res.text.includes(`Token = "${TOKEN}"`), "the token is filled in");
-    assert.ok(res.text.includes(`LoaderUrl = "http://pc.lan:${PORT}/client.lua?token=${TOKEN}"`), "so is the address for loading it again after a teleport");
+    assert.ok(!res.text.includes("LoaderUrl"), "there is no loader address in the script any more, nothing is queued for a teleport");
     res = await request(PORT, `/client.lua?token=${TOKEN}`, { host: "bad host" });
     assert.ok(res.status === 200 && res.text.includes(`Url = "ws://127.0.0.1:${PORT}"`), "an odd Host header falls back to the local address");
 

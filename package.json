@@ -1,6 +1,6 @@
 {
   "name": "superbase",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Superbase: a local MCP server that connects AI assistants to live Roblox executor sessions. Read logs and errors, explore the instance tree with selectors, read and search scripts, spy on remotes, operate the GUI, take screenshots, see players, measure performance, diff snapshots and run Lua, with a web dashboard and the connection status reported on every call.",
   "private": true,
   "main": "src/bridge.js",

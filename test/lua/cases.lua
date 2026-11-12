@@ -472,6 +472,157 @@ check("recipe list-sounds: all", r.total == 2, r.total)
 r = run("recipes/list-sounds.lua", { playing_only = true })
 check("recipe list-sounds: playing only", r.total == 1 and r.sounds[1].path == "Workspace.Boom", r.total)
 
+-- built-in recipes: interactables, values, npcs, tools, animations ----------------
+local function detach(inst)
+    local parent = rawget(inst, "Parent")
+    if parent then
+        local kids = rawget(parent, "_children")
+        for index, child in ipairs(kids) do
+            if child == inst then
+                table.remove(kids, index)
+                break
+            end
+        end
+    end
+end
+local bobCharacterBefore = rawget(H.nodes.bob, "Character")
+
+local doorPrompt = H.nodes.workspace:FindFirstChild("Door"):FindFirstChild("Prompt")
+rawset(doorPrompt, "ActionText", "Open")
+rawset(doorPrompt, "ObjectText", "Door")
+rawset(doorPrompt, "HoldDuration", 0.5)
+rawset(doorPrompt, "MaxActivationDistance", 10)
+rawset(doorPrompt, "Enabled", true)
+rawset(doorPrompt, "KeyboardKeyCode", "Enum.KeyCode.E")
+r = run("recipes/list-interactables.lua", {})
+check("recipe list-interactables: prompts and click detectors", r.total == 2 and r.returned == 2, r.total)
+r = run("recipes/list-interactables.lua", { kind = "prompt" })
+check("recipe list-interactables: prompt details", r.total == 1 and r.interactables[1].actionText == "Open" and r.interactables[1].holdDuration == 0.5 and r.interactables[1].key == "Enum.KeyCode.E" and r.interactables[1].maxDistance == 10, r.total)
+r = run("recipes/list-interactables.lua", { kind = "click" })
+check("recipe list-interactables: click only", r.total == 1 and r.interactables[1].class == "ClickDetector" and r.interactables[1].actionText == nil, r.total)
+r = run("recipes/list-interactables.lua", { contains = "DOOR" })
+check("recipe list-interactables: contains is case-insensitive", r.total == 1 and r.interactables[1].path == "Workspace.Door.Prompt", r.total)
+r = run("recipes/list-interactables.lua", { kind = "nonsense", limit = 1 })
+check("recipe list-interactables: unknown kind means all, limit works", r.total == 2 and r.returned == 1, r.total)
+
+local stats = new("Folder", "Stats", {}, H.nodes.workspace)
+new("IntValue", "Level", { Value = 5 }, stats)
+new("StringValue", "Title", { Value = "Rookie" }, stats)
+new("ObjectValue", "Target", { Value = H.nodes.map }, stats)
+new("BoolValue", "Empty", {}, stats)
+r = run("recipes/list-values.lua", { path = "Workspace.Stats" })
+check("recipe list-values: finds every value object", r.total == 4 and r.returned == 4, r.total)
+local byName = {}
+for _, item in ipairs(r.values or {}) do byName[item.path:match("[^%.]+$")] = item end
+check("recipe list-values: values are shown", byName.Level.value == 5 and byName.Title.value == "Rookie" and byName.Target.value == "Workspace.Map" and byName.Empty.value == nil, r.total)
+r = run("recipes/list-values.lua", { path = "game.Workspace.Stats", contains = "LEV" })
+check("recipe list-values: a path with game and contains", r.total == 1 and r.values[1].class == "IntValue", r.total)
+r = run("recipes/list-values.lua", { path = "Workspace.Nope" })
+check("recipe list-values: missing path is an error", r.error ~= nil and r.error:find("Nope") ~= nil, r.error)
+r = run("recipes/list-values.lua", { limit = 2 })
+check("recipe list-values: whole game and limit", r.total >= 4 and r.returned == 2, r.total)
+detach(stats)
+
+local myModel = new("Model", "BobChar", {}, H.nodes.workspace)
+new("Part", "HumanoidRootPart", { Position = { X = 0, Y = 0, Z = 0 } }, myModel)
+new("Humanoid", "Humanoid", { Health = 100, MaxHealth = 100 }, myModel)
+rawset(H.nodes.bob, "Character", myModel)
+local guard = new("Model", "Guard", {}, H.nodes.workspace)
+new("Part", "HumanoidRootPart", { Position = { X = 3, Y = 4, Z = 0 } }, guard)
+new("Humanoid", "Humanoid", { Health = 80, MaxHealth = 100 }, guard)
+local faraway = new("Model", "FarAway", {}, H.nodes.workspace)
+new("Part", "HumanoidRootPart", { Position = { X = 30, Y = 0, Z = 40 } }, faraway)
+new("Humanoid", "Humanoid", { Health = 10, MaxHealth = 50 }, faraway)
+r = run("recipes/list-npcs.lua", {})
+check("recipe list-npcs: skips player characters, nearest first", r.total == 2 and r.npcs[1].name == "Guard" and r.npcs[2].name == "FarAway", r.total)
+check("recipe list-npcs: distance and health", r.npcs[1].distance == 5 and r.npcs[2].distance == 50 and r.npcs[1].health == 80 and r.npcs[2].maxHealth == 50 and r.npcs[1].position.y == 4)
+r = run("recipes/list-npcs.lua", { contains = "FAR" })
+check("recipe list-npcs: contains is case-insensitive", r.total == 1 and r.npcs[1].name == "FarAway", r.total)
+r = run("recipes/list-npcs.lua", { limit = 1 })
+check("recipe list-npcs: limit", r.total == 2 and r.returned == 1)
+
+local backpack = new("Backpack", "Backpack", {}, H.nodes.bob)
+new("Tool", "Sword", { CanBeDropped = true, RequiresHandle = false, ToolTip = "Slash" }, backpack)
+new("Tool", "Torch", { CanBeDropped = false, RequiresHandle = true, ToolTip = "" }, myModel)
+new("Tool", "Lost", {}, H.nodes.workspace)
+local starterPack = new("Folder", "StarterPack", {})
+new("Tool", "Starter", {}, starterPack)
+H.extraServices.StarterPack = starterPack
+r = run("recipes/list-tools.lua", {})
+local where = {}
+for _, item in ipairs(r.tools or {}) do where[item.name] = item.where end
+check("recipe list-tools: every place is searched once", r.total == 4 and where.Sword == "backpack" and where.Torch == "equipped" and where.Starter == "starterPack" and where.Lost == "workspace", r.total)
+check("recipe list-tools: details", r.tools[1].name == "Sword" and r.tools[1].canBeDropped == true and r.tools[1].toolTip == "Slash" and r.tools[2].toolTip == nil)
+r = run("recipes/list-tools.lua", { contains = "SW" })
+check("recipe list-tools: contains is case-insensitive", r.total == 1 and r.tools[1].name == "Sword", r.total)
+r = run("recipes/list-tools.lua", { limit = 1 })
+check("recipe list-tools: limit", r.total == 4 and r.returned == 1)
+H.extraServices.StarterPack = nil
+detach(backpack)
+
+local animator = new("Animator", "Animator", {}, myModel:FindFirstChild("Humanoid"))
+rawset(animator, "GetPlayingAnimationTracks", function()
+    return { { Name = "Run", Animation = { AnimationId = "rbxassetid://123" }, Priority = "Enum.AnimationPriority.Movement", Length = 1.234, Speed = 1, WeightCurrent = 1, TimePosition = 0.5, Looped = true } }
+end)
+r = run("recipes/playing-animations.lua", {})
+check("recipe playing-animations: lists the tracks", r.count == 1 and r.player == "Bob" and r.tracks[1].name == "Run" and r.tracks[1].animationId == "rbxassetid://123" and r.tracks[1].priority == "Enum.AnimationPriority.Movement" and r.tracks[1].length == 1.23 and r.tracks[1].looped == true, r.error)
+r = run("recipes/playing-animations.lua", { player = "Bob" })
+check("recipe playing-animations: a player by name", r.count == 1)
+r = run("recipes/playing-animations.lua", { player = "Nobody" })
+check("recipe playing-animations: unknown player is an error", r.error ~= nil and r.error:find("Nobody") ~= nil, r.error)
+detach(animator)
+r = run("recipes/playing-animations.lua", {})
+check("recipe playing-animations: no Animator is an error", r.error ~= nil and r.error:find("Animator") ~= nil, r.error)
+rawset(H.nodes.bob, "Character", nil)
+r = run("recipes/playing-animations.lua", {})
+check("recipe playing-animations: no character is an error", r.error ~= nil and r.error:find("no character") ~= nil, r.error)
+rawset(H.nodes.bob, "Character", bobCharacterBefore)
+detach(myModel)
+detach(guard)
+detach(faraway)
+detach(H.nodes.workspace:FindFirstChild("Lost"))
+
+-- built-in recipe: executor-functions -----------------------------------------------
+H.genv.myHelper = function() end
+H.genv.zetaFn = function() end
+H.genv.Toolkit = { alpha = 1, beta = 2, gamma = function() end }
+H.genv.IsLoaded = true
+H.genv.RetryCount = 3
+H.genv.script_key = "abc-secret-123"
+H.genv.__SuperbaseInternal = { hidden = true }
+r = run("recipes/executor-functions.lua", {})
+local function has(list, name)
+    for _, item in ipairs(list) do
+        if item == name or (type(item) == "table" and item.name == name) then return item end
+    end
+    return nil
+end
+local sortedNames = true
+for index = 2, #r.functions do
+    if r.functions[index - 1] > r.functions[index] then sortedNames = false end
+end
+check("recipe executor-functions: functions are listed by name, sorted", has(r.functions, "myHelper") ~= nil and has(r.functions, "zetaFn") ~= nil and sortedNames, #r.functions)
+local toolkit = has(r.tables, "Toolkit")
+check("recipe executor-functions: tables show their member names", toolkit ~= nil and toolkit.entries == 3 and toolkit.members[1] == "alpha" and toolkit.members[3] == "gamma", toolkit and toolkit.entries)
+check("recipe executor-functions: booleans and numbers show the value", has(r.values, "IsLoaded").value == true and has(r.values, "RetryCount").value == 3)
+local secret = has(r.values, "script_key")
+local leaked = false
+for field, value in pairs(secret or {}) do
+    if type(value) == "string" and value:find("secret", 1, true) then leaked = true end
+end
+check("recipe executor-functions: a string is never shown, only its length", secret ~= nil and secret.length == 14 and secret.value == nil and not leaked)
+check("recipe executor-functions: Superbase's own entries are left out", has(r.tables, "__SuperbaseInternal") == nil and has(r.functions, "__SuperbaseInternal") == nil)
+check("recipe executor-functions: counts and total", r.total == 6 and r.counts["function"] == 2 and r.counts.table >= 1 and r.returned == r.total, r.total)
+r = run("recipes/executor-functions.lua", { contains = "HELP" })
+check("recipe executor-functions: contains is case-insensitive", r.total == 1 and r.functions[1] == "myHelper" and #r.tables == 0, r.total)
+r = run("recipes/executor-functions.lua", { type = "table" })
+check("recipe executor-functions: type filter", #r.functions == 0 and #r.values == 0 and has(r.tables, "Toolkit") ~= nil)
+r = run("recipes/executor-functions.lua", { members = false, contains = "toolkit" })
+check("recipe executor-functions: members false", r.tables[1].entries == 3 and r.tables[1].members == nil)
+r = run("recipes/executor-functions.lua", { limit = 2 })
+check("recipe executor-functions: limit", r.returned == 2 and r.total == 6 and #r.functions + #r.tables + #r.values == 2)
+for _, key in ipairs({ "myHelper", "zetaFn", "Toolkit", "IsLoaded", "RetryCount", "script_key", "__SuperbaseInternal" }) do H.genv[key] = nil end
+
 -- dump_scripts ---------------------------------------------------------------
 H.genv.__SuperbaseSources = nil
 r = run("dump_scripts.lua", {}, { decompile = function(inst) return rawget(inst, "Source") end })

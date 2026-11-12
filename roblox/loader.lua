@@ -9,7 +9,7 @@ local BRIDGE = "127.0.0.1:9731"
 local TOKEN = "" -- only for a bridge started with a token, it is added to the address as ?token=
 local RETRY_SECONDS = 3
 -- "npm run setup" and "npm run autoexec" set this to true in the copy they put in the autoexec folder. The executor then
--- runs the loader again after every teleport, so the client does not need queue_on_teleport.
+-- runs the loader again after every teleport, which is how the client comes back. The client only uses this marker for its message.
 local AUTOEXEC = false
 
 local environment = _G

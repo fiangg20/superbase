@@ -472,9 +472,13 @@ async function main() {
     // Recipes: the built-in ones are listed, a saved one can be run, and nothing leaves the folder.
     res = await mcp.call("recipes", {});
     const listed = bodyOf(res).recipes.map((recipe) => recipe.name);
-    for (const name of ["list-remotes", "dump-leaderstats", "list-gui-text", "workspace-summary", "list-sounds"]) {
+    for (const name of ["list-remotes", "dump-leaderstats", "list-gui-text", "workspace-summary", "list-sounds", "list-interactables", "list-values", "list-npcs", "list-tools", "playing-animations", "executor-functions"]) {
       assert.ok(listed.includes(name), `the built-in recipe ${name} is listed`);
     }
+    assert.ok(/explicitly/.test(bodyOf(res).note) && /not into recipes/.test(bodyOf(res).note), "the list reminds the AI that requested scripts do not belong in recipes");
+    assert.ok(instructions.includes("freecam") && /Never save it as a recipe unless the user explicitly asks/.test(instructions), "the instructions tell the AI not to store requested scripts as recipes");
+    const recipesTool = (await mcp.rpc("tools/list")).result.tools.find((tool) => tool.name === "recipes");
+    assert.ok(/give the code to the user in your reply/.test(recipesTool.description) && /explicitly asks you to save a recipe/.test(recipesTool.description), "the recipes tool says that requested scripts go to the user");
     res = await mcp.call("recipes", { action: "run", name: "list-remotes", args: { contains: "buy" } });
     assert.strictEqual(bodyOf(res).value.snippet, "recipe:list-remotes");
     assert.deepStrictEqual(bodyOf(res).value.args, { contains: "buy" });
